@@ -31,6 +31,7 @@ func New(d Deps) *gin.Engine {
 	d.registerUsers(v1)
 	d.registerRoles(v1)
 	d.registerInstances(v1)
+	d.registerAudit(v1)
 	return r
 }
 
