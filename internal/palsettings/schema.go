@@ -23,12 +23,18 @@ type Field struct {
 
 // Fields 返回 schema 全部字段（按 fields.json 文件序）。
 // 单例加载：首次调用解析嵌入的 fields.json，之后复用缓存。
+// 返回内部数据的副本（Options 逐字段深拷贝），调用方改写不影响共享 schema。
 func Fields() []Field {
 	loadFields()
 	if fieldsErr != nil {
 		return nil
 	}
-	return fieldsCache
+	out := make([]Field, len(fieldsCache))
+	for i, f := range fieldsCache {
+		f.Options = append([]string(nil), f.Options...)
+		out[i] = f
+	}
+	return out
 }
 
 // FieldByKey 按键名查找字段。

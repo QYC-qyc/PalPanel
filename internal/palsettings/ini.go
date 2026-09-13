@@ -103,10 +103,11 @@ func splitRespectingQuotes(s string) []string {
 	return tokens
 }
 
-// unquote 去除包裹引号，内部 "" 还原为 "。
+// unquote 去除包裹引号。"" 转义还原已由 splitRespectingQuotes 在切分时
+// 完成一次，这里只剥外壳，不再二次解码（否则连续 "" 会丢引号）。
 func unquote(s string) string {
 	if len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
-		return strings.ReplaceAll(s[1:len(s)-1], `""`, `"`)
+		return s[1 : len(s)-1]
 	}
 	return s
 }

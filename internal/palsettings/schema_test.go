@@ -26,6 +26,19 @@ func TestFieldsSingletonAndOrder(t *testing.T) {
 	}
 }
 
+func TestFieldsReturnsCopy(t *testing.T) {
+	a := Fields()
+	a[0].Key = "Tampered"
+	a[0].Type = "int"
+	b := Fields()
+	if b[0].Key != "Difficulty" || b[0].Type != "enum" {
+		t.Fatalf("Fields() 应返回副本防外部改写: got %q/%q", b[0].Key, b[0].Type)
+	}
+	if f, _ := FieldByKey("Difficulty"); f.Key != "Difficulty" {
+		t.Fatal("FieldByKey 受到污染")
+	}
+}
+
 func TestFieldByKey(t *testing.T) {
 	f, ok := FieldByKey("ExpRate")
 	if !ok {

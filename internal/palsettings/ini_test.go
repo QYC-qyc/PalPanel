@@ -107,6 +107,27 @@ func TestSerializeQuoteEscapeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSerializeParseRoundTripQuoteEdge(t *testing.T) {
+	cases := []string{
+		`pass""word`, // 连续双引号
+		`"`,          // 恰为单个引号
+		`"a"`,        // 两端引号
+		`a"b,c=d`,    // 引号+逗号+等号混合
+		`a,b`,        // 纯逗号
+	}
+	for _, v := range cases {
+		line := Serialize(map[string]string{"ServerName": v}, nil)
+		full := "; h\n[/Script/Pal.PalGameWorldSettings]\n" + line + "\n"
+		m, err := ParseINI(full)
+		if err != nil {
+			t.Fatalf("ParseINI(%q): %v", line, err)
+		}
+		if m["ServerName"] != v {
+			t.Fatalf("往返不一致: 原值 %q, 序列化 %q, 解析回 %q", v, line, m["ServerName"])
+		}
+	}
+}
+
 func TestFormatValueBoolAndFloat(t *testing.T) {
 	if got := formatValue(Field{Key: "b", Type: "bool"}, "true"); got != "True" {
 		t.Fatalf("bool true → %q, 期望 True", got)
