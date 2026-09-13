@@ -29,10 +29,12 @@ import (
 )
 
 var (
-	// ErrCorrupted 表示存档包损坏或不完整（gzip/tar 结构错、CRC 不符等）。
+	// ErrCorrupted 表示存档包损坏或不完整（gzip/tar 结构错、CRC 不符、条目路径逃逸等）。
 	ErrCorrupted = errors.New("backup: 存档包损坏或不完整")
 	// ErrCancelled 表示操作因 ctx 取消而中止。
 	ErrCancelled = errors.New("backup: 操作已取消")
+	// ErrInvalidTarget 表示恢复目标路径非法（空/./.. /卷根等危险路径）。
+	ErrInvalidTarget = errors.New("backup: 恢复目标路径非法")
 )
 
 // panelPrefix 是 Create 追加的虚拟文件的统一前缀，Restore 时跳过。
@@ -40,10 +42,11 @@ const panelPrefix = "_panel/"
 
 // BackupInfo 描述一个备份包的基本信息。
 type BackupInfo struct {
-	File      string // 备份包路径
-	SizeBytes int64  // 落盘文件大小
-	FileCount int    // tar 内普通文件条目数（含 _panel/ 虚拟文件）
-	SHA256    string // 对落盘文件整体计算的十六进制摘要
+	File      string   // 备份包路径
+	SizeBytes int64    // 落盘文件大小
+	FileCount int      // tar 内普通文件条目数（含 _panel/ 虚拟文件）
+	SHA256    string   // 对落盘文件整体计算的十六进制摘要
+	Warnings  []string // 打包过程中的非致命告警（如跳过的符号链接）
 }
 
 // Create 把 sourceDir 整树打进 gzip tar 写入 destFile，extra 追加为
@@ -102,13 +105,21 @@ func Create(ctx context.Context, sourceDir, destFile string, extra map[string][]
 		if ctx.Err() != nil {
 			return ErrCancelled
 		}
-		// 目录不单独建条目（空目录跳过）；符号链接等特殊文件跳过不跟随
-		if d.IsDir() || !d.Type().IsRegular() {
-			return nil
-		}
 		rel, err := filepath.Rel(sourceDir, path)
 		if err != nil {
 			return err
+		}
+		// 目录不单独建条目（空目录跳过）
+		if d.IsDir() {
+			return nil
+		}
+		// 符号链接跳过不跟随，并记 warning；其余特殊文件跳过
+		if d.Type()&fs.ModeSymlink != 0 {
+			info.Warnings = append(info.Warnings, "跳过符号链接: "+filepath.ToSlash(rel))
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
 		}
 		fh, err := os.Open(path)
 		if err != nil {
@@ -150,6 +161,9 @@ func Create(ctx context.Context, sourceDir, destFile string, extra map[string][]
 		return fail(err)
 	}
 	if err := gz.Close(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
 		return fail(err)
 	}
 	aborted = false
@@ -215,10 +229,14 @@ func countEntries(path string) (int, error) {
 	return count, nil
 }
 
-// Restore 先 Verify，再清空 targetDir 原有内容，随后解包：
-// "_panel/" 前缀条目跳过不落盘；每落盘一个条目回调 onEntry（传相对路径）。
+// Restore 先 Verify，校验目标路径合法性，再清空 targetDir 原有内容，随后解包：
+// "_panel/" 前缀条目跳过不落盘；条目路径逃逸按 ErrCorrupted 拒绝；
+// 每落盘一个条目回调 onEntry（传相对路径）。
 func Restore(ctx context.Context, destFile, targetDir string, onEntry func(name string)) error {
 	if _, err := Verify(destFile); err != nil {
+		return err
+	}
+	if err := validateTargetDir(targetDir); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -259,14 +277,14 @@ func Restore(ctx context.Context, destFile, targetDir string, onEntry func(name 
 		if name == "_panel" || strings.HasPrefix(name, panelPrefix) {
 			continue
 		}
-		// 防路径逃逸（zip-slip）：Clean 后拒绝绝对路径与 ..
+		// 防路径逃逸（zip-slip）：Clean 后拒绝绝对路径与 ..；fail-loud 不静默跳过
 		rel := filepath.Clean(filepath.FromSlash(name))
 		if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
+			return fmt.Errorf("%w: 条目路径逃逸: %q", ErrCorrupted, name)
 		}
 		dest := filepath.Join(root, rel)
 		if dest != root && !strings.HasPrefix(dest, root+string(filepath.Separator)) {
-			continue
+			return fmt.Errorf("%w: 条目路径逃逸: %q", ErrCorrupted, name)
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -297,6 +315,21 @@ func Restore(ctx context.Context, destFile, targetDir string, onEntry func(name 
 		if onEntry != nil {
 			onEntry(filepath.ToSlash(name))
 		}
+	}
+	return nil
+}
+
+// validateTargetDir 校验恢复目标路径，拒绝会引发大规模误删的危险路径：
+// 空（Clean 后为 "."）、"."、".."、卷根（如 "D:\"、"/"）与盘符相对路径（如 "D:"）。
+func validateTargetDir(targetDir string) error {
+	cleaned := filepath.Clean(targetDir)
+	if cleaned == "" || cleaned == "." || cleaned == ".." {
+		return ErrInvalidTarget
+	}
+	vol := filepath.VolumeName(cleaned)
+	rest := strings.TrimPrefix(cleaned, vol)
+	if rest == "" || rest == string(filepath.Separator) {
+		return ErrInvalidTarget
 	}
 	return nil
 }

@@ -49,6 +49,16 @@ func mustCreate(t *testing.T, src, dest string, extra map[string][]byte) BackupI
 	return info
 }
 
+// assertInfoEqual 逐字段比较两个 BackupInfo（含切片字段，结构不可直接 ==）。
+func assertInfoEqual(t *testing.T, got, want BackupInfo) {
+	t.Helper()
+	if got.File != want.File || got.SizeBytes != want.SizeBytes ||
+		got.FileCount != want.FileCount || got.SHA256 != want.SHA256 ||
+		strings.Join(got.Warnings, "|") != strings.Join(want.Warnings, "|") {
+		t.Errorf("info = %+v, want %+v", got, want)
+	}
+}
+
 func listEntries(t *testing.T, path string) []string {
 	t.Helper()
 	f, err := os.Open(path)
@@ -99,6 +109,10 @@ func TestCreateVerifyRoundTrip(t *testing.T) {
 	if info.FileCount != 5 {
 		t.Errorf("FileCount = %d, want 5", info.FileCount)
 	}
+	// 源树无符号链接，不应有 warning
+	if len(info.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want empty", info.Warnings)
+	}
 	// SHA256 必须与对落盘文件二次读取重算的结果一致
 	f, err := os.Open(dest)
 	if err != nil {
@@ -117,9 +131,7 @@ func TestCreateVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if got != info {
-		t.Errorf("Verify info = %+v, want %+v", got, info)
-	}
+	assertInfoEqual(t, got, info)
 
 	// 条目应为相对路径 + _panel/ 虚拟文件，且中文文件名完好
 	names := listEntries(t, dest)
@@ -231,6 +243,119 @@ func TestRestoreClearsJunk(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, "saves", "Level.sav")); err != nil {
 		t.Errorf("restored file missing: %v", err)
+	}
+}
+
+// 顺带 1：符号链接条目跳过并记 warning（不跟随）
+func TestCreateSkipsSymlinkWithWarning(t *testing.T) {
+	src := makeSourceTree(t)
+	link := filepath.Join(src, "link-to-level.sav")
+	if err := os.Symlink(filepath.Join(src, "saves", "Level.sav"), link); err != nil {
+		t.Skipf("此环境无法创建符号链接（需要特权/开发者模式）: %v", err)
+	}
+	dest := filepath.Join(t.TempDir(), "backup.tar.gz")
+	info := mustCreate(t, src, dest, nil)
+
+	if len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "link-to-level.sav") {
+		t.Errorf("Warnings = %v, want [跳过符号链接: link-to-level.sav]", info.Warnings)
+	}
+	// 符号链接目标不应被作为普通文件打进包里
+	names := listEntries(t, dest)
+	for _, name := range names {
+		if name == "link-to-level.sav" {
+			t.Errorf("symlink entry %q should be skipped", name)
+		}
+	}
+	// 还原后不应出现链接文件
+	target := filepath.Join(t.TempDir(), "restore")
+	if err := Restore(context.Background(), dest, target, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "link-to-level.sav")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("symlink restored to target, lstat err = %v", err)
+	}
+}
+
+// 顺带 3：恶意 tar（含 ../ 逃逸条目）→ ErrCorrupted，且逃逸文件不落盘
+func TestRestoreRejectsPathEscape(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	add := func(name, content string) {
+		t.Helper()
+		if err := tw.WriteHeader(&tar.Header{
+			Typeflag: tar.TypeReg, Name: name, Size: int64(len(content)),
+			Mode: 0o644, Format: tar.FormatPAX,
+		}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("write body: %v", err)
+		}
+	}
+	add("ok.txt", "fine")
+	add("../evil.txt", "escaped")
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	evil := filepath.Join(t.TempDir(), "evil.tar.gz")
+	if err := os.WriteFile(evil, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write evil archive: %v", err)
+	}
+	// Verify 自身可通过（结构合法），守卫在 Restore 解包层 fail-loud
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	err := Restore(context.Background(), evil, target, nil)
+	if !errors.Is(err, ErrCorrupted) {
+		t.Fatalf("err = %v, want ErrCorrupted", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(parent, "evil.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("escaped file written outside target, lstat err = %v", statErr)
+	}
+}
+
+// Important 修复：Restore 目标路径守卫——拒绝 "." / "" / ".." / 卷根，且不触碰现有内容
+func TestRestoreRejectsInvalidTargetDir(t *testing.T) {
+	src := makeSourceTree(t)
+	dest := filepath.Join(t.TempDir(), "backup.tar.gz")
+	mustCreate(t, src, dest, nil)
+
+	// "." 与 "" 用 chdir 到隔离目录验证：返回 ErrInvalidTarget 且原内容未被触碰
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "marker.txt")
+	if err := os.WriteFile(marker, []byte("keep-me"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	for _, target := range []string{".", ""} {
+		if err := Restore(context.Background(), dest, target, nil); !errors.Is(err, ErrInvalidTarget) {
+			t.Errorf("targetDir=%q err = %v, want ErrInvalidTarget", target, err)
+		}
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("marker file touched by Restore(.), stat err = %v", err)
+	}
+
+	// ".." 与卷根同样拒绝
+	if err := Restore(context.Background(), dest, "..", nil); !errors.Is(err, ErrInvalidTarget) {
+		t.Errorf("targetDir=%q err = %v, want ErrInvalidTarget", "..", err)
+	}
+	if vol := filepath.VolumeName(oldWd); vol != "" {
+		root := vol + string(filepath.Separator)
+		if err := Restore(context.Background(), dest, root, nil); !errors.Is(err, ErrInvalidTarget) {
+			t.Errorf("targetDir=%q err = %v, want ErrInvalidTarget", root, err)
+		}
 	}
 }
 
