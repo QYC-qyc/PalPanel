@@ -43,4 +43,13 @@ func TestSeedIdempotent(t *testing.T) {
 	if got != len(AllPermissions) {
 		t.Fatalf("admin perms %d want %d", got, len(AllPermissions))
 	}
+	// operator 拥有 player.announce 与 player.save（防止权限集遗漏）
+	var opNew int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id
+		WHERE r.name='operator' AND rp.code IN (?, ?)`, PPlayerAnnounce, PPlayerSave).Scan(&opNew); err != nil {
+		t.Fatal(err)
+	}
+	if opNew != 2 {
+		t.Fatalf("operator player.announce/save perms %d want 2", opNew)
+	}
 }

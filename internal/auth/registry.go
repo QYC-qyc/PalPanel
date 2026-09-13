@@ -63,6 +63,7 @@ var builtinRoles = []struct {
 		PInstanceInstall, PInstanceUpgrade,
 		PBackupRead, PBackupCreate, PBackupRestore,
 		PConfigRead, PConfigWrite, PPlayerRead, PPlayerKick, PPlayerBan,
+		PPlayerAnnounce, PPlayerSave,
 		PScheduleManage, PAuditRead,
 	}},
 	{"viewer", "只读", []string{
