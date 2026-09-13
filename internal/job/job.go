@@ -67,7 +67,15 @@ func (m *Manager) Start(kind string, instanceID int64, fn func(ctx context.Conte
 		m.broadcast(j)
 	}
 	go func() {
-		err := fn(context.Background(), report)
+		// recover 兜底：fn panic 不能带崩进程，按失败任务收尾并释放 running 键
+		err := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("内部错误: %v", r)
+				}
+			}()
+			return fn(context.Background(), report)
+		}()
 		m.mu.Lock()
 		delete(m.running, key)
 		if err != nil {

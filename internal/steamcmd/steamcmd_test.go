@@ -1,7 +1,9 @@
 package steamcmd
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
@@ -79,6 +81,97 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// TestExtractBlocksSiblingEscape（回归）：包内路径 `../<dest基名>x/…` 指向兄弟目录，
+// 不得因目录前缀误判（dest=…\sc 命中 …\scx 前缀）而逃逸出 dest。zip 与 tar.gz 两种格式都验。
+func TestExtractBlocksSiblingEscapeZip(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "sc")
+	archive := makeZip(t, filepath.Join(dir, "evil.zip"), map[string]string{
+		"../scx/evil.txt": "pwned",
+		ExeName():         "x",
+	})
+	if err := extract(archive, dest); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSibling(t, dir, dest)
+}
+
+func TestExtractBlocksSiblingEscapeTarGz(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "sc")
+	archive := makeTarGz(t, filepath.Join(dir, "evil.tar.gz"), map[string]string{
+		"../scx/evil.txt": "pwned",
+		ExeName():         "x",
+	})
+	if err := extract(archive, dest); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSibling(t, dir, dest)
+}
+
+func assertNoSibling(t *testing.T, dir, dest string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, "scx", "evil.txt")); !os.IsNotExist(err) {
+		t.Fatal("兄弟目录逃逸未被拦截")
+	}
+	if _, err := os.Stat(filepath.Join(dest, ExeName())); err != nil {
+		t.Fatalf("合法文件未解压: %v", err)
+	}
+}
+
+func makeZip(t *testing.T, path string, files map[string]string) string {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	for name, body := range files {
+		fw, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func makeTarGz(t *testing.T, path string, files map[string]string) string {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestRunStreamsLines(t *testing.T) {

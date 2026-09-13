@@ -82,6 +82,37 @@ func TestFailCarriesError(t *testing.T) {
 	}
 }
 
+// TestPanicMarksFailed：fn panic 不带崩进程——任务置 failed（Error=内部错误: 值）、
+// running 键释放（同实例同 kind 可再次启动）。
+func TestPanicMarksFailed(t *testing.T) {
+	m := NewManager(event.NewHub())
+	id, err := m.Start("install", 1, func(ctx context.Context, report func(int, string)) error {
+		panic("boom")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		j, ok := m.Get(id)
+		if ok && j.State == StateFailed {
+			if j.Error != "内部错误: boom" {
+				t.Fatalf("error %q", j.Error)
+			}
+			if _, err := m.Start("install", 1, func(ctx context.Context, report func(int, string)) error {
+				return nil
+			}); err != nil {
+				t.Fatalf("running 键未释放: %v", err)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job not failed: %+v", j)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestJobEventsBroadcast(t *testing.T) {
 	hub := event.NewHub()
 	ch, cancel := hub.Subscribe()

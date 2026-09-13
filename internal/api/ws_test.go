@@ -29,6 +29,15 @@ func TestWSEvents(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
+	// 订阅就绪后再广播，消除 handler goroutine 尚未 Subscribe 的竞态
+	subsDeadline := time.Now().Add(2 * time.Second)
+	for deps.Hub.Subscribers() == 0 {
+		if time.Now().After(subsDeadline) {
+			t.Fatal("ws 订阅未就绪")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
 	deps.Hub.Broadcast(event.Event{Type: "instance.status", InstanceID: 1, Payload: "running"})
 	_, data, err := conn.Read(ctx)
 	if err != nil {

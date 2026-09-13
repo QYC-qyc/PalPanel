@@ -86,6 +86,17 @@ func extract(archive, dest string) error {
 	return extractTarGz(archive, dest)
 }
 
+// containedIn 判断 target 是否位于 dest 之内（含等于），用于 zip-slip 守卫。
+// 不用裸 HasPrefix：dest=…\sc 时兄弟目录 …\scx 也会命中前缀，必须补路径分隔符比较。
+func containedIn(target, dest string) bool {
+	dest = filepath.Clean(dest)
+	target = filepath.Clean(target)
+	if target == dest {
+		return true
+	}
+	return strings.HasPrefix(target, dest+string(filepath.Separator))
+}
+
 func extractZip(archive, dest string) error {
 	r, err := zip.OpenReader(archive)
 	if err != nil {
@@ -94,7 +105,7 @@ func extractZip(archive, dest string) error {
 	defer r.Close()
 	for _, f := range r.File {
 		target := filepath.Join(dest, f.Name)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)) {
+		if !containedIn(target, dest) {
 			continue // zip-slip 守卫
 		}
 		if f.FileInfo().IsDir() {
@@ -146,7 +157,7 @@ func extractTarGz(archive, dest string) error {
 			return err
 		}
 		target := filepath.Join(dest, hdr.Name)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)) {
+		if !containedIn(target, dest) {
 			continue // zip-slip 守卫
 		}
 		if hdr.Typeflag != tar.TypeReg {

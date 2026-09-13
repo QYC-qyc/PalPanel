@@ -35,6 +35,13 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	return ch, cancel
 }
 
+// Subscribers 返回当前订阅者数量（测试用于确认订阅已生效，消除广播竞态）。
+func (h *Hub) Subscribers() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.subs)
+}
+
 // Broadcast 向所有订阅者广播事件；慢消费者（缓冲满）直接丢弃，不阻塞。
 func (h *Hub) Broadcast(e Event) {
 	h.mu.RLock()
