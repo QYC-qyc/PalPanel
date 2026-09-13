@@ -9,14 +9,16 @@ import (
 	"palpanel/internal/audit"
 	"palpanel/internal/auth"
 	"palpanel/internal/config"
+	"palpanel/internal/instance"
 )
 
 type Deps struct {
-	Cfg    config.Config
-	DB     *sql.DB // Task 2 接入
-	Auth   *auth.Service
-	Audit  *audit.Recorder
-	Secret []byte
+	Cfg       config.Config
+	DB        *sql.DB // Task 2 接入
+	Auth      *auth.Service
+	Audit     *audit.Recorder
+	Secret    []byte
+	Instances *instance.Store
 }
 
 func New(d Deps) *gin.Engine {
@@ -28,6 +30,7 @@ func New(d Deps) *gin.Engine {
 	d.registerAuthed(v1)
 	d.registerUsers(v1)
 	d.registerRoles(v1)
+	d.registerInstances(v1)
 	return r
 }
 

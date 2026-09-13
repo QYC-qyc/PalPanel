@@ -7,11 +7,11 @@ import (
 )
 
 func TestUserCRUDAndPermission(t *testing.T) {
-	r, svc, admin := setupAdmin(t)
+	r, database, admin := setupAdmin(t)
 
 	// 创建 operator 用户
 	w := postJSON(r, "/api/v1/users", admin, map[string]any{
-		"username": "op", "password": "good-pass-2", "role_ids": operatorRoleID(t, svc)})
+		"username": "op", "password": "good-pass-2", "role_ids": operatorRoleID(t, database)})
 	if w.Code != http.StatusOK {
 		t.Fatalf("create user: %d %s", w.Code, w.Body.String())
 	}

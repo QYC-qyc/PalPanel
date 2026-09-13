@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -12,9 +13,11 @@ import (
 	"palpanel/internal/auth"
 	"palpanel/internal/config"
 	"palpanel/internal/db"
+	"palpanel/internal/instance"
 )
 
-func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service) {
+// newTestRouter 返回路由、auth 服务与数据库句柄（测试按需取用）。
+func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service, *sql.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	d, err := db.Open(dir)
@@ -33,13 +36,15 @@ func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service) {
 		t.Fatal(err)
 	}
 	svc := auth.New(d, secret)
-	return New(Deps{
-		Cfg:    config.Config{Listen: ":0", DataDir: dir},
-		DB:     d,
-		Auth:   svc,
-		Audit:  audit.New(d),
-		Secret: secret,
-	}), svc
+	r := New(Deps{
+		Cfg:       config.Config{Listen: ":0", DataDir: dir},
+		DB:        d,
+		Auth:      svc,
+		Audit:     audit.New(d),
+		Secret:    secret,
+		Instances: instance.New(d),
+	})
+	return r, svc, d
 }
 
 func decode(t *testing.T, body []byte) map[string]any {
@@ -99,20 +104,26 @@ func loginToken(t *testing.T, r *gin.Engine, username, password string) string {
 	return decode(t, w.Body.Bytes())["token"].(string)
 }
 
-// setupAdmin 完成 setup + login，返回路由、auth 服务与管理员 token。
-func setupAdmin(t *testing.T) (*gin.Engine, *auth.Service, string) {
+// setupAdmin 完成 setup + login，返回路由、数据库句柄与管理员 token。
+func setupAdmin(t *testing.T) (*gin.Engine, *sql.DB, string) {
 	t.Helper()
-	r, svc := newTestRouter(t)
+	r, _, d := newTestRouter(t)
 	postJSON(r, "/api/v1/setup", "", map[string]string{"username": "root", "password": "good-pass-1"})
-	return r, svc, loginToken(t, r, "root", "good-pass-1")
+	return r, d, loginToken(t, r, "root", "good-pass-1")
 }
 
-// operatorRoleID 直接查库取 operator 角色 ID（roles API 属后续任务）。
-func operatorRoleID(t *testing.T, svc *auth.Service) []int64 {
+// queryInt64 查询单值（不存在时报错，避免测试里吞错）。
+func queryInt64(t *testing.T, d *sql.DB, query string) int64 {
 	t.Helper()
 	var id int64
-	if err := svc.DB.QueryRow(`SELECT id FROM roles WHERE name='operator'`).Scan(&id); err != nil {
-		t.Fatalf("query operator role: %v", err)
+	if err := d.QueryRow(query).Scan(&id); err != nil {
+		t.Fatalf("query %s: %v", query, err)
 	}
-	return []int64{id}
+	return id
+}
+
+// operatorRoleID 直接查库取 operator 角色 ID（内置角色 ID 不硬编码）。
+func operatorRoleID(t *testing.T, d *sql.DB) []int64 {
+	t.Helper()
+	return []int64{queryInt64(t, d, `SELECT id FROM roles WHERE name='operator'`)}
 }

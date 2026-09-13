@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoginAndMe(t *testing.T) {
-	r, _ := newTestRouter(t)
+	r, _, _ := newTestRouter(t)
 	postJSON(r, "/api/v1/setup", "", map[string]string{"username": "root", "password": "good-pass-1"})
 	w := postJSON(r, "/api/v1/login", "", map[string]string{"username": "root", "password": "good-pass-1"})
 	if w.Code != http.StatusOK {

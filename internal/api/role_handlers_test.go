@@ -10,7 +10,7 @@ import (
 )
 
 func TestRoleFlow(t *testing.T) {
-	r, svc, admin := setupAdmin(t)
+	r, database, admin := setupAdmin(t)
 
 	// 列表含内置三角色及权限码
 	w := getJSON(r, "/api/v1/roles", admin)
@@ -35,7 +35,7 @@ func TestRoleFlow(t *testing.T) {
 
 	// 内置角色不可删（operator 角色 ID 查库取得，不硬编码）
 	var operatorID int64
-	if err := svc.DB.QueryRow(`SELECT id FROM roles WHERE name='operator'`).Scan(&operatorID); err != nil {
+	if err := database.QueryRow(`SELECT id FROM roles WHERE name='operator'`).Scan(&operatorID); err != nil {
 		t.Fatal(err)
 	}
 	w = deleteJSON(r, "/api/v1/roles/"+itoa(operatorID), admin)

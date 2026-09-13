@@ -6,7 +6,7 @@ import (
 )
 
 func TestSetupHTTP(t *testing.T) {
-	r, _ := newTestRouter(t)
+	r, _, _ := newTestRouter(t)
 	if w := postJSON(r, "/api/v1/setup", "", map[string]string{"username": "root", "password": "good-pass-1"}); w.Code != http.StatusOK {
 		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
 	}
