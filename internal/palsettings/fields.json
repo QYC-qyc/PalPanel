@@ -1,0 +1,26 @@
+[
+  {
+    "key": "Difficulty",
+    "type": "enum",
+    "default": "None",
+    "options": ["None", "Difficulty"],
+    "group": "基础",
+    "help": "游戏难度预设"
+  },
+  {
+    "key": "ExpRate",
+    "type": "float",
+    "default": "1.000000",
+    "min": 0.1,
+    "max": 20.0,
+    "group": "基础",
+    "help": "经验获取倍率"
+  },
+  {
+    "key": "ServerName",
+    "type": "string",
+    "default": "",
+    "group": "基础",
+    "help": "服务器名称（最长 128 字符）"
+  }
+]
