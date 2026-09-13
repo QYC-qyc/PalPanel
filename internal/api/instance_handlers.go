@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -85,18 +84,8 @@ func (d Deps) handleInstanceList(c *gin.Context) {
 }
 
 func (d Deps) handleInstanceGet(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		fail(c, http.StatusBadRequest, "实例 ID 不合法")
-		return
-	}
-	in, err := d.Instances.Get(id)
-	if errors.Is(err, instance.ErrNotFound) {
-		fail(c, http.StatusNotFound, "实例不存在")
-		return
-	}
-	if err != nil {
-		fail(c, http.StatusInternalServerError, "查询失败")
+	in, ok := d.loadInstance(c)
+	if !ok {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"instance": toDTO(in)})
@@ -176,9 +165,8 @@ func (d Deps) handleInstanceCreate(c *gin.Context) {
 }
 
 func (d Deps) handleInstancePatch(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		fail(c, http.StatusBadRequest, "实例 ID 不合法")
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	in, err := d.Instances.Get(id)
@@ -263,9 +251,8 @@ func (d Deps) handleInstancePatch(c *gin.Context) {
 }
 
 func (d Deps) handleInstanceDelete(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
-		fail(c, http.StatusBadRequest, "实例 ID 不合法")
+	id, ok := parseID(c)
+	if !ok {
 		return
 	}
 	if err := d.Instances.Delete(id); errors.Is(err, instance.ErrNotFound) {

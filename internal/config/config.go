@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Listen  string `yaml:"listen"`
-	DataDir string `yaml:"data_dir"`
+	Listen      string `yaml:"listen"`
+	DataDir     string `yaml:"data_dir"`
+	SteamCmdDir string `yaml:"steamcmd_dir"` // 空 → <data_dir>/steamcmd（main 装配时回填）
 }
 
 func Load(path string) (Config, error) {

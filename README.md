@@ -2,7 +2,7 @@
 
 面向社区的幻兽帕鲁（Palworld）专用服务器开源管理面板。
 
-> ⚠️ 当前处于早期开发阶段（V1-M1 后端基座已完成，前端与进程管理在后续里程碑）。
+> ⚠️ 当前处于早期开发阶段（V1-M2 进程管理与安装能力已完成，均为后端 API；前端在后续里程碑）。
 
 ## 功能规划
 
@@ -29,6 +29,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/setup \
 docker build -t palpanel .
 docker run -d -p 8080:8080 -v palpanel-data:/app/data palpanel
 ```
+
+## 实例管理 API（M2）
+
+全部挂在 `/api/v1/instances/:id` 下，需 Bearer token 与对应权限码（详见 docs/superpowers/specs）：
+
+| 端点 | 方法 | 权限 | 说明 |
+|---|---|---|---|
+| `/start` `/stop` `/restart` | POST | instance.start / instance.stop / 两者 | 启动/优雅停机（REST→RCON→强杀链）/重启 |
+| `/install` | POST | instance.install | 异步 job 安装/校验（SteamCMD），进行中重复请求 409 |
+| `/update-check` | GET | instance.upgrade | `{local, remote, up_to_date}` |
+| `/update` | POST | instance.upgrade | 运行中先优雅停服 → 更新 → 保持停止 |
+| `/status` | GET | instance.read | `{status, pid, started_at, restarts, metrics?}` |
+| `/logs?tail=200` | GET | instance.read | console.log 末 N 行（上限 1000） |
+| `/players` | GET | player.read | 在线玩家（官方 REST API） |
+| `/players/kick` `/players/ban` | POST | player.kick / player.ban | `{"uid":"1"}` |
+| `/announce` `/save` | POST | player.announce / player.save | 广播 / 手动存档 |
+
+实时事件（状态变更/日志流/任务进度）经 `GET /api/ws?token=<JWT>` 推送。
 
 ## 构建
 
