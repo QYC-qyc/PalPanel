@@ -59,24 +59,32 @@ func (d Deps) handleUserList(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	defer rows.Close()
-	out := []userDTO{}
+	// DB 连接池为 MaxOpenConns(1)：必须先读完用户行并关闭 rows，
+	// 才能再调用 userByID 发起内层查询，否则内层 Query 会等连接造成死锁。
+	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			fail(c, http.StatusInternalServerError, "查询失败")
 			return
 		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		fail(c, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	rows.Close()
+	out := []userDTO{}
+	for _, id := range ids {
 		u, err := d.userByID(id)
 		if err != nil {
 			fail(c, http.StatusInternalServerError, "查询失败")
 			return
 		}
 		out = append(out, u)
-	}
-	if err := rows.Err(); err != nil {
-		fail(c, http.StatusInternalServerError, "查询失败")
-		return
 	}
 	c.JSON(http.StatusOK, gin.H{"users": out})
 }

@@ -23,6 +23,16 @@ func TestUserCRUDAndPermission(t *testing.T) {
 		t.Fatalf("op want 403 got %d", w.Code)
 	}
 
+	// admin 访问用户列表 → 200，且包含 root 与 op（防列表查询死锁回归）
+	names := map[string]bool{}
+	users, _ := decode(t, getJSON(r, "/api/v1/users", admin).Body.Bytes())["users"].([]any)
+	for _, it := range users {
+		names[it.(map[string]any)["username"].(string)] = true
+	}
+	if !names["root"] || !names["op"] {
+		t.Fatalf("user list missing root/op: %v", names)
+	}
+
 	// admin 重置密码、停用
 	w = patchJSON(r, fmt.Sprintf("/api/v1/users/%d", uid), admin,
 		map[string]any{"is_active": false})
