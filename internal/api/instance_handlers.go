@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 
@@ -269,6 +270,30 @@ func (d Deps) handleInstanceDelete(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
 	}
+	// 级联清理定时任务行与备份（库行 + 磁盘文件），随后调度器热加载使内存同步。
+	// 备份文件删除尽力而为：文件缺失不阻断（库行仍会清理）。
+	if _, err := d.DB.Exec(`DELETE FROM schedules WHERE instance_id=?`, id); err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	if files, err := d.DB.Query(`SELECT file FROM backups WHERE instance_id=?`, id); err == nil {
+		var paths []string
+		for files.Next() {
+			var p string
+			if files.Scan(&p) == nil {
+				paths = append(paths, p)
+			}
+		}
+		files.Close()
+		if _, err := d.DB.Exec(`DELETE FROM backups WHERE instance_id=?`, id); err != nil {
+			fail(c, http.StatusInternalServerError, "删除失败")
+			return
+		}
+		for _, p := range paths {
+			_ = os.Remove(p)
+		}
+	}
+	d.reloadSched()
 	caller := c.MustGet("user").(auth.SessionUser)
 	d.Audit.Record(caller.ID, caller.Username, id, "instance.delete", "删除实例", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"ok": true})

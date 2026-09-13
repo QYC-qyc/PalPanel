@@ -8,6 +8,7 @@ import (
 
 	"palpanel/internal/audit"
 	"palpanel/internal/auth"
+	"palpanel/internal/backup"
 	"palpanel/internal/config"
 	"palpanel/internal/event"
 	"palpanel/internal/gateway"
@@ -27,6 +28,12 @@ type Deps struct {
 	Hub       *event.Hub   // Task 3 WS 推送
 	Jobs      *job.Manager // Task 4+ 任务调度
 	Sup       *supervisor.Manager // Task 9 进程守护（StartFn/Killer 由 main 或测试注入）
+
+	// 备份与定时任务（M3-T6）：Backups 为元数据存储；BackupSvc 为备份服务
+	// （真实备份/恢复/清理链）；Sched 为调度器热加载入口（Task 9 装配，可为 nil）。
+	Backups   *backup.Store
+	BackupSvc BackupRunner
+	Sched     ScheduleReloader
 
 	// RESTFor/RCONFor 是生产与测试共用的注入点：按实例取 REST/RCON 客户端。
 	// 生产实现 = DefaultRESTFor/DefaultRCONFor(secret)（解密 AdminPassword → 本机连接）；
@@ -50,6 +57,8 @@ func New(d Deps) *gin.Engine {
 	d.registerRoles(v1)
 	d.registerInstances(v1)
 	d.registerInstanceActions(v1)
+	d.registerBackup(v1)
+	d.registerSchedules(v1)
 	d.registerAudit(v1)
 	return r
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"palpanel/internal/auth"
+	"palpanel/internal/backup"
 	"palpanel/internal/gateway"
 	"palpanel/internal/instance"
 	"palpanel/internal/job"
@@ -308,8 +309,37 @@ func (d Deps) handleInstanceUpdateCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"local": local, "remote": remote, "up_to_date": local == remote})
 }
 
-// handleInstanceUpdate：运行中则先优雅停服 → SteamCMD 更新 → 更新后保持停止
-//（不自动拉起，由管理员确认后手动 start）。
+// runUpdateJob 更新任务主体：优雅停服 → 更新前自动备份（pre-update，失败则
+// 中止更新）→ SteamCMD 更新；更新后保持停止。handleInstanceUpdate 与调度器
+// update 分派（M3-T9）共用；备份服务未装配时跳过备份步骤。
+func (d Deps) runUpdateJob(ctx context.Context, inst instance.Instance, report func(int, string)) error {
+	st, found := d.Sup.Status(inst.ID)
+	if found && (st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {
+		report(5, "优雅停服中")
+		if err := d.Sup.Stop(inst.ID); err != nil && !errors.Is(err, supervisor.ErrNotRunning) {
+			return fmt.Errorf("停服失败: %w", err)
+		}
+	} else if inst.Status == "running" {
+		// 面板外残留进程：守护器无托管记录（如面板重启后失联），Sup.Stop 无法代走
+		// 停机链，直接执行优雅停机钩子（REST Shutdown → RCON Exit，尽力而为）。
+		report(5, "优雅停服中")
+		d.stopOrphan(inst)
+	}
+	if d.BackupSvc != nil {
+		report(8, "更新前自动备份")
+		if _, err := d.BackupSvc.RunBackup(ctx, inst, "pre-update", "更新前自动备份"); err != nil {
+			// 存档目录尚不存在（从未开服）视为无需保护，继续更新
+			if !errors.Is(err, backup.ErrSavesMissing) {
+				return fmt.Errorf("更新前备份失败: %w", err)
+			}
+		}
+	}
+	report(10, "开始下载/校验更新")
+	return d.Installer.Install(ctx, inst.GameDir, report, nil)
+}
+
+// handleInstanceUpdate：运行中则先优雅停服 → pre-update 备份 → SteamCMD 更新 →
+// 更新后保持停止（不自动拉起，由管理员确认后手动 start）。
 func (d Deps) handleInstanceUpdate(c *gin.Context) {
 	if d.Installer == nil || d.Jobs == nil {
 		fail(c, http.StatusInternalServerError, "安装服务未配置")
@@ -320,20 +350,7 @@ func (d Deps) handleInstanceUpdate(c *gin.Context) {
 		return
 	}
 	if _, err := d.Jobs.Start("update", in.ID, func(ctx context.Context, report func(int, string)) error {
-		st, found := d.Sup.Status(in.ID)
-		if found && (st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {
-			report(5, "优雅停服中")
-			if err := d.Sup.Stop(in.ID); err != nil && !errors.Is(err, supervisor.ErrNotRunning) {
-				return fmt.Errorf("停服失败: %w", err)
-			}
-		} else if in.Status == "running" {
-			// 面板外残留进程：守护器无托管记录（如面板重启后失联），Sup.Stop 无法代走
-			// 停机链，直接执行优雅停机钩子（REST Shutdown → RCON Exit，尽力而为）。
-			report(5, "优雅停服中")
-			d.stopOrphan(in)
-		}
-		report(10, "开始下载/校验更新")
-		return d.Installer.Install(ctx, in.GameDir, report, nil)
+		return d.runUpdateJob(ctx, in, report)
 	}); errors.Is(err, job.ErrDuplicate) {
 		fail(c, http.StatusConflict, err.Error())
 		return
