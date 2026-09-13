@@ -1,26 +1,842 @@
 [
   {
     "key": "Difficulty",
-    "type": "enum",
+    "type": "string",
     "default": "None",
-    "options": ["None", "Difficulty"],
-    "group": "基础",
-    "help": "游戏难度预设"
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RandomizerType",
+    "type": "string",
+    "default": "None",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RandomizerSeed",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsRandomizerPalLevelRandom",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DayTimeSpeedRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "NightTimeSpeedRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
   },
   {
     "key": "ExpRate",
     "type": "float",
     "default": "1.000000",
-    "min": 0.1,
-    "max": 20.0,
-    "group": "基础",
-    "help": "经验获取倍率"
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalCaptureRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalSpawnNumRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalDamageRateAttack",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalDamageRateDefense",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerDamageRateAttack",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerDamageRateDefense",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerStomachDecreaceRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerStaminaDecreaceRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerAutoHPRegeneRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerAutoHpRegeneRateInSleep",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalStomachDecreaceRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalStaminaDecreaceRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalAutoHPRegeneRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalAutoHpRegeneRateInSleep",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BuildObjectHpRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BuildObjectDamageRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BuildObjectDeteriorationDamageRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "CollectionDropRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "CollectionObjectHpRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "CollectionObjectRespawnSpeedRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "EnemyDropItemRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DeathPenalty",
+    "type": "string",
+    "default": "Item",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnablePlayerToPlayerDamage",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableFriendlyFire",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableInvaderEnemy",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bActiveUNKO",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableAimAssistPad",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableAimAssistKeyboard",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DropItemMaxNum",
+    "type": "int",
+    "default": "3000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PhysicsActiveDropItemMaxNum",
+    "type": "int",
+    "default": "-1",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DropItemMaxNum_UNKO",
+    "type": "int",
+    "default": "100",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BaseCampMaxNum",
+    "type": "int",
+    "default": "128",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BaseCampWorkerMaxNum",
+    "type": "int",
+    "default": "15",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DropItemAliveMaxHours",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAutoResetGuildNoOnlinePlayers",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AutoResetGuildTimeNoOnlinePlayers",
+    "type": "float",
+    "default": "72.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "GuildPlayerMaxNum",
+    "type": "int",
+    "default": "20",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BaseCampMaxNumInGuild",
+    "type": "int",
+    "default": "4",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PalEggDefaultHatchingTime",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "WorkSpeedRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AutoSaveSpan",
+    "type": "float",
+    "default": "30.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsMultiplay",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsPvP",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bHardcore",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bPalLost",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bCharacterRecreateInHardcore",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bCanPickupOtherGuildDeathPenaltyDrop",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableNonLoginPenalty",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableFastTravel",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableFastTravelOnlyBaseCamp",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsStartLocationSelectByMap",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bExistPlayerAfterLogout",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableDefenseOtherGuildPlayer",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bInvisibleOtherGuildBaseCampAreaFX",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bBuildAreaLimit",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ItemWeightRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "CoopPlayerMaxNum",
+    "type": "int",
+    "default": "4",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ServerPlayerMaxNum",
+    "type": "int",
+    "default": "32",
+    "group": "通用",
+    "help": ""
   },
   {
     "key": "ServerName",
     "type": "string",
+    "default": "Default Palworld Server",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ServerDescription",
+    "type": "string",
     "default": "",
-    "group": "基础",
-    "help": "服务器名称（最长 128 字符）"
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AdminPassword",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ServerPassword",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowClientMod",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PublicPort",
+    "type": "int",
+    "default": "8211",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PublicIP",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RCONEnabled",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RCONPort",
+    "type": "int",
+    "default": "25575",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "Region",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bUseAuth",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BanListURL",
+    "type": "string",
+    "default": "https://b.palworldgame.com/api/banlist.txt",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RESTAPIEnabled",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RESTAPIPort",
+    "type": "int",
+    "default": "8212",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bShowPlayerList",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ChatPostLimitPerMinute",
+    "type": "int",
+    "default": "30",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "CrossplayPlatforms",
+    "type": "string",
+    "default": "(Steam,Xbox,PS5,Mac)",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsUseBackupSaveData",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "LogFormatType",
+    "type": "string",
+    "default": "Text",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bIsShowJoinLeftMessage",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "SupplyDropSpan",
+    "type": "int",
+    "default": "180",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "EnablePredatorBossPal",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "MaxBuildingLimitNum",
+    "type": "int",
+    "default": "0",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ServerReplicatePawnCullDistance",
+    "type": "float",
+    "default": "15000.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowGlobalPalboxExport",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowGlobalPalboxImport",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "EquipmentDurabilityDamageRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ItemContainerForceMarkDirtyInterval",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "PlayerDataPalStorageUpdateCheckTickInterval",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "ItemCorruptionMultiplier",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "MonsterFarmActionSpeedRate",
+    "type": "float",
+    "default": "1.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "DenyTechnologyList",
+    "type": "string",
+    "default": "",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "GuildRejoinCooldownMinutes",
+    "type": "int",
+    "default": "0",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AutoTransferMasterCheckIntervalSeconds",
+    "type": "float",
+    "default": "3600.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AutoTransferMasterThresholdDays",
+    "type": "int",
+    "default": "14",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "MaxGuildsPerFrame",
+    "type": "int",
+    "default": "10",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BlockRespawnTime",
+    "type": "float",
+    "default": "5.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RespawnPenaltyDurationThreshold",
+    "type": "float",
+    "default": "0.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "RespawnPenaltyTimeScale",
+    "type": "float",
+    "default": "2.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bDisplayPvPItemNumOnWorldMap_BaseCamp",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bDisplayPvPItemNumOnWorldMap_Player",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AdditionalDropItemWhenPlayerKillingInPvPMode",
+    "type": "string",
+    "default": "PlayerDropItem",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "AdditionalDropItemNumWhenPlayerKillingInPvPMode",
+    "type": "int",
+    "default": "1",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAdditionalDropItemWhenPlayerKillingInPvPMode",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableVoiceChat",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "VoiceChatMaxVolumeDistance",
+    "type": "float",
+    "default": "3000.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "VoiceChatZeroVolumeDistance",
+    "type": "float",
+    "default": "15000.000000",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnhanceStat_Health",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnhanceStat_Attack",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnhanceStat_Stamina",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnhanceStat_Weight",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnhanceStat_WorkSpeed",
+    "type": "bool",
+    "default": "True",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bEnableBuildingPlayerUIdDisplay",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "BuildingNameDisplayCacheTTLSeconds",
+    "type": "int",
+    "default": "60",
+    "group": "通用",
+    "help": ""
+  },
+  {
+    "key": "bAllowEnemyCampSpawnNearBaseCamp",
+    "type": "bool",
+    "default": "False",
+    "group": "通用",
+    "help": ""
   }
 ]

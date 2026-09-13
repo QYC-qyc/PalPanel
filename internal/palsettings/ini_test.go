@@ -76,18 +76,41 @@ func TestSerializeOrderAndPreserve(t *testing.T) {
 		"Alpha":      "a",
 	}
 	got := Serialize(overrides, existing)
-	want := "OptionSettings=(Difficulty=Difficulty,ExpRate=2.500000,ServerName=Pal Panel,Alpha=a,Zeta=z)"
-	if got != want {
-		t.Fatalf("Serialize:\n got  %s\n want %s", got, want)
+	// 全量 schema 下输出含所有键，这里按相对顺序与关键片段断言
+	iDiff := strings.Index(got, "Difficulty=Difficulty")
+	iExp := strings.Index(got, "ExpRate=2.500000")
+	iName := strings.Index(got, "ServerName=Pal Panel")
+	iAlpha := strings.Index(got, ",Alpha=a")
+	iZeta := strings.Index(got, ",Zeta=z")
+	if iDiff < 0 || iExp < 0 || iName < 0 || iAlpha < 0 || iZeta < 0 {
+		t.Fatalf("Serialize 缺少关键片段: %s", got)
+	}
+	// schema 键按 fields.json 序，未管理键按字母序追加在末尾
+	if !(iDiff < iExp && iExp < iName && iName < iAlpha && iAlpha < iZeta) {
+		t.Fatalf("Serialize 键序不符: %s", got)
+	}
+	// 除两个未管理键外不应再有等号后内容跟在 Zeta 之后
+	if tail := got[iZeta:]; tail != ",Zeta=z)" {
+		t.Fatalf("未管理键应在末尾: %q", tail)
 	}
 }
 
 func TestSerializeEmptyOverrideFallsBack(t *testing.T) {
-	// 空 override 视为未设置，回退 existing → Default
+	// 空 override 视为未设置，回退 existing → Default（取实机 ini 默认值）
 	got := Serialize(map[string]string{"ServerName": ""}, map[string]string{})
-	want := "OptionSettings=(Difficulty=None,ExpRate=1.000000,ServerName=)"
-	if got != want {
-		t.Fatalf("Serialize:\n got  %s\n want %s", got, want)
+	m, err := ParseINI("; h\n[/Script/Pal.PalGameWorldSettings]\n" + got + "\n")
+	if err != nil {
+		t.Fatalf("ParseINI: %v", err)
+	}
+	if m["ServerName"] != "Default Palworld Server" {
+		t.Fatalf("空 override 应回退到实机默认值: %q", m["ServerName"])
+	}
+	if m["ServerPassword"] != "" {
+		// 实机默认即为空串的键，回退后仍为空
+		t.Fatalf("ServerPassword 应回退到空串默认: %q", m["ServerPassword"])
+	}
+	if m["Difficulty"] != "None" || m["ExpRate"] != "1.000000" {
+		t.Fatalf("应回退到 schema Default: %q/%q", m["Difficulty"], m["ExpRate"])
 	}
 }
 
@@ -141,13 +164,21 @@ func TestFormatValueBoolAndFloat(t *testing.T) {
 }
 
 func TestValidateValueWithSchemaField(t *testing.T) {
-	// fields.json 中的 ExpRate 走 schema 校验路径
+	// fields.json 中的 ExpRate 走 schema 校验路径（全量生成后无 Min/Max 限制）
 	f, _ := FieldByKey("ExpRate")
 	if err := Validate(f, "1.5"); err != nil {
 		t.Fatalf("ExpRate=1.5 应合法: %v", err)
 	}
-	if err := Validate(f, "0"); err == nil {
-		t.Fatal("ExpRate=0 应低于下限")
+	if err := Validate(f, "0"); err != nil {
+		t.Fatalf("无 Min 限制时 ExpRate=0 应合法: %v", err)
+	}
+	if err := Validate(f, "abc"); err == nil {
+		t.Fatal("ExpRate=abc 应报非数值错误")
+	}
+	// string 类型键：长度限制生效
+	fs, _ := FieldByKey("ServerName")
+	if err := Validate(fs, strings.Repeat("测", 129)); err == nil {
+		t.Fatal("ServerName 129 字符应报超长错误")
 	}
 }
 
