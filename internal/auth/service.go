@@ -129,7 +129,8 @@ func (s *Service) BumpUser(userID int64) error {
 }
 
 // Can 判定用户是否拥有权限码 code：全局权限直接放行；
-// instanceID>0 时还需该实例的 grant（用户级或角色级）。
+// instanceID>0 时优先看是否持有 instance.manage（全局权限，隐式全实例授权），
+// 没有才要求该实例的 grant（用户级或角色级）。
 func (s *Service) Can(userID int64, code string, instanceID int64) (bool, error) {
 	var n int
 	err := s.DB.QueryRow(`SELECT COUNT(*) FROM user_roles ur
@@ -140,6 +141,15 @@ func (s *Service) Can(userID int64, code string, instanceID int64) (bool, error)
 	}
 	if instanceID == 0 {
 		return true, nil // 全局权限
+	}
+	err = s.DB.QueryRow(`SELECT COUNT(*) FROM user_roles ur
+		JOIN role_permissions rp ON rp.role_id=ur.role_id
+		WHERE ur.user_id=? AND rp.code=?`, userID, PInstanceManage).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil // instance.manage 隐式授权全部实例
 	}
 	err = s.DB.QueryRow(`SELECT COUNT(*) FROM instance_grants ig
 		WHERE ig.instance_id=? AND (ig.user_id=? OR ig.role_id IN

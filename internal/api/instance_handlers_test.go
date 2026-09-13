@@ -72,4 +72,14 @@ func TestInstanceVisibilityAndSecret(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("viewer patch want 403 got %d", w.Code)
 	}
+
+	// admin 无需实例 grant 即可详情与删除（instance.manage 隐式全实例授权，回归）
+	w = getJSON(r, "/api/v1/instances/"+itoa(iid), admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin get detail want 200 got %d %s", w.Code, w.Body.String())
+	}
+	w = deleteJSON(r, "/api/v1/instances/"+itoa(iid), admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin delete want 200 got %d %s", w.Code, w.Body.String())
+	}
 }
