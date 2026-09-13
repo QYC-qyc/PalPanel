@@ -16,6 +16,7 @@ type BackupRecord struct {
 	InstanceID int64
 	File       string // 备份文件路径（库中记录值）
 	SizeBytes  int64  // 对应表列 size
+	SHA256     string // 备份包整体摘要（落账时由引擎计算；历史行为空）
 	Type       string
 	Note       string
 	CreatedAt  time.Time
@@ -31,8 +32,8 @@ func NewStore(db *sql.DB) *Store { return &Store{DB: db} }
 // Add 插入一条备份记录并返回自增 ID。
 // created_at 不传入，由表默认 datetime('now') 生成。
 func (s *Store) Add(b BackupRecord) (int64, error) {
-	res, err := s.DB.Exec(`INSERT INTO backups(instance_id, file, size, type, note)
-		VALUES(?,?,?,?,?)`, b.InstanceID, b.File, b.SizeBytes, b.Type, b.Note)
+	res, err := s.DB.Exec(`INSERT INTO backups(instance_id, file, size, sha256, type, note)
+		VALUES(?,?,?,?,?,?)`, b.InstanceID, b.File, b.SizeBytes, b.SHA256, b.Type, b.Note)
 	if err != nil {
 		return 0, err
 	}
@@ -51,7 +52,7 @@ func parseTimestamp(ts string) time.Time {
 func scanBackup(row interface{ Scan(...any) error }) (BackupRecord, error) {
 	var b BackupRecord
 	var ts string
-	err := row.Scan(&b.ID, &b.InstanceID, &b.File, &b.SizeBytes, &b.Type, &b.Note, &ts)
+	err := row.Scan(&b.ID, &b.InstanceID, &b.File, &b.SizeBytes, &b.SHA256, &b.Type, &b.Note, &ts)
 	b.CreatedAt = parseTimestamp(ts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
@@ -59,7 +60,7 @@ func scanBackup(row interface{ Scan(...any) error }) (BackupRecord, error) {
 	return b, err
 }
 
-const backupCols = `id, instance_id, file, size, type, note, created_at`
+const backupCols = `id, instance_id, file, size, sha256, type, note, created_at`
 
 // List 返回某实例的全部备份记录，created_at DESC（新→旧；
 // 同秒以 id DESC 决胜，保证同批插入时次序稳定）。

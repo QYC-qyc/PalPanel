@@ -11,6 +11,22 @@ type Config struct {
 	Listen      string `yaml:"listen"`
 	DataDir     string `yaml:"data_dir"`
 	SteamCmdDir string `yaml:"steamcmd_dir"` // 空 → <data_dir>/steamcmd（main 装配时回填）
+	Backup      Backup `yaml:"backup"`
+}
+
+// Backup 备份相关面板配置。
+type Backup struct {
+	// KeepCount 滚动清理保留条数（指针区分「未配置」与显式 0=不清理）；
+	// 未配置时经 KeepCountOrDefault 取默认 20。
+	KeepCount *int `yaml:"keep_count"`
+}
+
+// KeepCountOrDefault 返回保留条数：未配置时取 def。
+func (b Backup) KeepCountOrDefault(def int) int {
+	if b.KeepCount != nil {
+		return *b.KeepCount
+	}
+	return def
 }
 
 func Load(path string) (Config, error) {

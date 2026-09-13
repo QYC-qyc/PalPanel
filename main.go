@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"palpanel/internal/api"
 	"palpanel/internal/audit"
 	"palpanel/internal/auth"
+	"palpanel/internal/backup"
 	"palpanel/internal/config"
 	"palpanel/internal/db"
 	"palpanel/internal/event"
@@ -127,6 +129,16 @@ func main() {
 	sup.LogRoot = cfg.DataDir
 	sup.StartFn = supervisor.NewOSStarter // 生产启动器（os/exec + 树杀适配）
 
+	backupStore := backup.NewStore(database)
+	// 备份停服手段：Sup.Stop 的包装——实例未运行时容忍（返回 nil）。
+	supStop := func(id int64) error {
+		err := sup.Stop(id)
+		if errors.Is(err, supervisor.ErrNotRunning) {
+			return nil
+		}
+		return err
+	}
+
 	deps := api.Deps{
 		Cfg:       cfg,
 		DB:        database,
@@ -137,6 +149,8 @@ func main() {
 		Hub:       hub,
 		Jobs:      jobs,
 		Sup:       sup,
+		Backups:   backupStore,
+		BackupSvc: backup.NewService(backupStore, supStop, cfg.Backup.KeepCountOrDefault(20)),
 		RESTFor:   api.DefaultRESTFor(secret),
 		RCONFor:   api.DefaultRCONFor(secret),
 		Installer: installer.New(steamcmd.NewRunner(cfg.SteamCmdDir), httpDownload),
