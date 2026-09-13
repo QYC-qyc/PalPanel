@@ -25,6 +25,7 @@ func New(d Deps) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	d.registerAuth(v1)
+	d.registerAuthed(v1)
 	return r
 }
 

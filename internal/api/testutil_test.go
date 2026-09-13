@@ -42,6 +42,25 @@ func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service) {
 	}), svc
 }
 
+func getJSON(r *gin.Engine, path, token string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func decode(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	return m
+}
+
 func postJSON(r *gin.Engine, path string, body any) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(body)
 	w := httptest.NewRecorder()
