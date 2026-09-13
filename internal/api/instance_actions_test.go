@@ -44,11 +44,12 @@ func (f fakeInstaller) UpdateCheck(ctx context.Context, gameDir string, onLine f
 type fakeRESTServer struct {
 	srv *httptest.Server
 
-	mu       sync.Mutex
-	kicked   []string
-	banned   []string
-	announce []string
-	saves    int
+	mu        sync.Mutex
+	kicked    []string
+	banned    []string
+	announce  []string
+	saves     int
+	shutdowns int
 }
 
 func newFakeRESTServer(players string) *fakeRESTServer {
@@ -87,6 +88,11 @@ func newFakeRESTServer(players string) *fakeRESTServer {
 		case "/v1/api/save":
 			f.mu.Lock()
 			f.saves++
+			f.mu.Unlock()
+			_, _ = w.Write([]byte("{}"))
+		case "/v1/api/shutdown":
+			f.mu.Lock()
+			f.shutdowns++
 			f.mu.Unlock()
 			_, _ = w.Write([]byte("{}"))
 		default:
@@ -310,6 +316,85 @@ func TestUpdateStopsRunningInstance(t *testing.T) {
 	}
 	waitStatus(t, deps, id, supervisor.StateIdle, 3*time.Second) // 更新后保持停止
 	waitJobState(t, deps, "job-1", "done", 3*time.Second)
+}
+
+// TestUpdateStopsOrphanRunningInstance：面板外残留进程——守护器无托管记录
+//（Sup 无 proc）但 DB 状态为 running——update 同样先走优雅停机链（REST Shutdown）再更新。
+func TestUpdateStopsOrphanRunningInstance(t *testing.T) {
+	fake := newFakeRESTServer(`[]`)
+	installCalled := make(chan struct{})
+	r, deps, admin := setupAdminCfg(t, func(d *Deps) {
+		d.RESTFor = func(instance.Instance) (*gateway.Client, error) {
+			return gateway.NewForTest(fake.srv.URL, "pw"), nil
+		}
+		d.Installer = fakeInstaller{installFn: func(ctx context.Context, gameDir string, report func(int, string), onLine func(string)) error {
+			close(installCalled)
+			return nil
+		}}
+	})
+	id := createInstance(t, r, admin, t.TempDir())
+
+	// 面板外残留：Sup 无托管进程，仅 DB 状态为 running
+	if _, err := deps.DB.Exec(`UPDATE instances SET status='running' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/update", admin, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-installCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install not invoked")
+	}
+	waitJobState(t, deps, "job-1", "done", 3*time.Second)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.shutdowns != 1 {
+		t.Fatalf("残留进程停服链未被调用：shutdowns = %d", fake.shutdowns)
+	}
+}
+
+// TestStartBlockedDuringUpdate：update job 运行中 start → 409；job 完成后 start → 200。
+func TestStartBlockedDuringUpdate(t *testing.T) {
+	release := make(chan struct{})
+	installEntered := make(chan struct{})
+	r, deps, admin := setupAdminCfg(t, func(d *Deps) {
+		d.Installer = fakeInstaller{installFn: func(ctx context.Context, gameDir string, report func(int, string), onLine func(string)) error {
+			close(installEntered)
+			<-release
+			return nil
+		}}
+	})
+	id := createInstance(t, r, admin, t.TempDir())
+
+	w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/update", admin, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-installEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("update job 未进入安装阶段")
+	}
+
+	// update job 存续期间：start → 409
+	w = postJSON(r, "/api/v1/instances/"+itoa(id)+"/start", admin, nil)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("start during update: %d %s", w.Code, w.Body.String())
+	}
+
+	close(release)
+	waitJobState(t, deps, "job-1", "done", 3*time.Second)
+
+	// job 完成后：start → 200
+	w = postJSON(r, "/api/v1/instances/"+itoa(id)+"/start", admin, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start after update: %d %s", w.Code, w.Body.String())
+	}
+	waitStatus(t, deps, id, supervisor.StateRunning, 3*time.Second)
 }
 
 func TestLogsTail(t *testing.T) {

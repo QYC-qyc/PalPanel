@@ -12,6 +12,7 @@ import (
 const AppID = "2394010"
 
 var buildidRe = regexp.MustCompile(`"buildid"\s+"(\d+)"`)
+var branchRe = regexp.MustCompile(`^\s*"([^"]+)"\s*\{?\s*$`)
 var progressRe = regexp.MustCompile(`Update state \(0x[0-9a-fA-F]+\) (\w+), progress: ([\d.]+)`)
 
 // ParseManifestBuildID 从 appmanifest_*.acf 内容中解析 buildid。
@@ -28,8 +29,9 @@ func ParseAppInfoBuildID(output string) string {
 	first, public := "", ""
 	inPublic := false
 	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"public"`) {
-			inPublic = true
+		// 进入新 branch 名（"public"/"beta"/…）即复位：仅当仍处于 public 分支内才记为 public
+		if m := branchRe.FindStringSubmatch(line); m != nil {
+			inPublic = m[1] == "public"
 		}
 		if m := buildidRe.FindStringSubmatch(line); m != nil {
 			if first == "" {

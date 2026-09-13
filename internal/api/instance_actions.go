@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -26,6 +27,9 @@ import (
 	"palpanel/internal/rcon"
 	"palpanel/internal/supervisor"
 )
+
+// ErrUpdateInProgress：更新任务运行中拒绝启动实例（handleInstanceStart 映射 409）。
+var ErrUpdateInProgress = errors.New("更新进行中，暂不能启动")
 
 // Installer 是安装/更新服务的最小接口（生产注入 *installer.Service，测试注入 fake）。
 type Installer interface {
@@ -103,7 +107,7 @@ func DefaultRESTFor(secret []byte) func(instance.Instance) (*gateway.Client, err
 }
 
 // DefaultRCONFor 生产实现：rcon_enabled 守卫 → 解密 AdminPassword → RCON 拨号鉴权。
-// 注意：rcon.Dial 的鉴权读无超时（Task 8 已知），调用方（如 rconExit）须以 ctx 包裹。
+// 拨号与鉴权读均受 ctx 控制（本注入点无 ctx 入参，用 10s 超时兜底）。
 func DefaultRCONFor(secret []byte) func(instance.Instance) (*rcon.Conn, error) {
 	return func(inst instance.Instance) (*rcon.Conn, error) {
 		if !inst.RconEnabled {
@@ -113,7 +117,9 @@ func DefaultRCONFor(secret []byte) func(instance.Instance) (*rcon.Conn, error) {
 		if err != nil {
 			return nil, fmt.Errorf("解密管理密码失败: %w", err)
 		}
-		return rcon.Dial(context.Background(), fmt.Sprintf("127.0.0.1:%d", inst.GamePort), string(pw))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return rcon.Dial(ctx, fmt.Sprintf("127.0.0.1:%d", inst.GamePort), string(pw))
 	}
 }
 
@@ -150,8 +156,8 @@ func (d Deps) stopHooks(inst instance.Instance) supervisor.StopHooks {
 }
 
 // rconExit 经 RCON 注入点拨号鉴权后执行 Exit 并关闭。
-// 已知限制（Task 8）：rcon.Dial 的鉴权读无超时，故整体包一层 goroutine+select
-// 受 ctx 控制；ctx 取消时本调用立即返回，底层 goroutine 随拨号超时自行收尾。
+// 拨号/鉴权读受 ctx 控制；Exec 尚无 ctx（内部 10s 读超时），故整体仍包一层
+// goroutine+select：ctx 取消时本调用立即返回，底层 Exec 随读超时自行收尾。
 func (d Deps) rconExit(ctx context.Context, inst instance.Instance) error {
 	type res struct{ err error }
 	ch := make(chan res, 1)
@@ -195,6 +201,11 @@ func (d Deps) StartInstance(id int64) error { return d.startSup(id) }
 func (d Deps) handleInstanceStart(c *gin.Context) {
 	id, ok := parseID(c)
 	if !ok {
+		return
+	}
+	// 互斥：更新 job 运行中不允许启动（steamcmd 正在覆写文件，进程拉起必然异常）
+	if d.Jobs != nil && d.Jobs.RunningOfKind(id, "update") {
+		fail(c, http.StatusConflict, ErrUpdateInProgress.Error())
 		return
 	}
 	if err := d.startSup(id); errors.Is(err, supervisor.ErrAlreadyRunning) {
@@ -309,12 +320,17 @@ func (d Deps) handleInstanceUpdate(c *gin.Context) {
 		return
 	}
 	if _, err := d.Jobs.Start("update", in.ID, func(ctx context.Context, report func(int, string)) error {
-		if st, found := d.Sup.Status(in.ID); found &&
-			(st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {
+		st, found := d.Sup.Status(in.ID)
+		if found && (st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {
 			report(5, "优雅停服中")
 			if err := d.Sup.Stop(in.ID); err != nil && !errors.Is(err, supervisor.ErrNotRunning) {
 				return fmt.Errorf("停服失败: %w", err)
 			}
+		} else if in.Status == "running" {
+			// 面板外残留进程：守护器无托管记录（如面板重启后失联），Sup.Stop 无法代走
+			// 停机链，直接执行优雅停机钩子（REST Shutdown → RCON Exit，尽力而为）。
+			report(5, "优雅停服中")
+			d.stopOrphan(in)
 		}
 		report(10, "开始下载/校验更新")
 		return d.Installer.Install(ctx, in.GameDir, report, nil)
@@ -327,6 +343,26 @@ func (d Deps) handleInstanceUpdate(c *gin.Context) {
 	}
 	d.audit(c, in.ID, "instance.update", "更新服务端")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// stopOrphan 对守护器外的残留进程执行优雅停机钩子（REST → RCON，尽力而为，
+// 失败不阻断更新）；经优雅手段停下时同步 DB 状态为 idle，避免状态长期失真。
+func (d Deps) stopOrphan(inst instance.Instance) {
+	h := d.stopHooks(inst)
+	stopped := false
+	if h.REST != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		stopped = h.REST(ctx) == nil
+		cancel()
+	}
+	if !stopped && h.RCON != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopped = h.RCON(ctx) == nil
+		cancel()
+	}
+	if stopped {
+		_, _ = d.DB.Exec(`UPDATE instances SET status='idle' WHERE id=?`, inst.ID)
+	}
 }
 
 // ---- 状态/日志 ----

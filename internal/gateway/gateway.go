@@ -101,6 +101,13 @@ func (c *Client) Players(ctx context.Context) ([]Player, error) {
 	if err == nil {
 		return arr, nil
 	}
+	// 仅对响应形状不匹配（裸数组 vs 包裹对象）做二次请求：
+	// 认证/网络等错误重试也必然失败，徒增一次往返
+	var te *json.UnmarshalTypeError
+	var se *json.SyntaxError
+	if !errors.As(err, &te) && !errors.As(err, &se) {
+		return nil, err
+	}
 	var wrap struct {
 		Players []Player `json:"players"`
 	}

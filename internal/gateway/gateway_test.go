@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -12,12 +13,14 @@ func newServer(t *testing.T, wantPath, wantMethod string, status int, resp strin
 	t.Helper()
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != wantPath || r.Method != wantMethod {
-			t.Fatalf("%s %s", r.Method, r.URL.Path)
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+			return
 		}
 		u, p, ok := r.BasicAuth()
 		*gotAuth = u + ":" + p
 		if !ok || u != "admin" || p != "pw" {
-			t.Fatalf("auth %q:%q ok=%v", u, p, ok)
+			t.Errorf("auth %q:%q ok=%v", u, p, ok)
+			return
 		}
 		if r.Body != nil {
 			buf := make([]byte, 256)
@@ -56,6 +59,35 @@ func TestPlayersBareArray(t *testing.T) {
 	ps, err := newClient(s).Players(context.Background())
 	if err != nil || len(ps) != 1 || ps[0].UID != "1" || ps[0].Ping != 12.5 {
 		t.Fatalf("%+v %v", ps, err)
+	}
+}
+
+// TestPlayersWrappedObject：包裹形态 {"players":[...]}，首次解码失败后二次请求成功。
+func TestPlayersWrappedObject(t *testing.T) {
+	var auth, body string
+	s := newServer(t, "/v1/api/players", "GET", 200,
+		`{"players":[{"name":"w","uid":"2","steamid":"s2","ping":3.5}]}`, &auth, &body)
+	defer s.Close()
+	ps, err := newClient(s).Players(context.Background())
+	if err != nil || len(ps) != 1 || ps[0].UID != "2" || ps[0].Ping != 3.5 {
+		t.Fatalf("%+v %v", ps, err)
+	}
+}
+
+// TestPlayersNonShapeErrorNoRetry：非形状错误（401）不做二次请求，直接返回 ErrAuth。
+func TestPlayersNonShapeErrorNoRetry(t *testing.T) {
+	var hits int32
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"x"}`))
+	}))
+	defer s.Close()
+	if _, err := newClient(s).Players(context.Background()); !errors.Is(err, ErrAuth) {
+		t.Fatalf("want ErrAuth got %v", err)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("非形状错误不应二次请求：hits = %d", n)
 	}
 }
 

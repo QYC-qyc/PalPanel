@@ -47,6 +47,35 @@ func TestParseAppInfoBuildID(t *testing.T) {
 	}
 }
 
+// fixtureAppInfoBetaAfterPublic：public 分支在前（无 buildid，仅有顶层 buildid），
+// beta 分支在后——进入新 branch 名必须复位 inPublic，beta 的 buildid 不得被误取。
+const fixtureAppInfoBetaAfterPublic = `{
+ "2394010"
+ {
+  "buildid"		"25080279"
+  "depots"
+  {
+   "branches"
+   {
+    "public"
+    {
+     "timeupdated"		"1725800000"
+    }
+    "beta"
+    {
+     "buildid"		"12345678"
+    }
+   }
+  }
+ }
+}`
+
+func TestParseAppInfoBuildIDResetsOnNewBranch(t *testing.T) {
+	if got := ParseAppInfoBuildID(fixtureAppInfoBetaAfterPublic); got != "25080279" {
+		t.Fatalf("beta 不得被误取为 public：got %q", got)
+	}
+}
+
 func TestParseProgressLine(t *testing.T) {
 	p, state, ok := ParseProgressLine(`Update state (0x61) downloading, progress: 45.6 (123456789 bytes).`)
 	if !ok || p != 45 || state != "downloading" {
