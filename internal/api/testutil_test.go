@@ -13,11 +13,13 @@ import (
 	"palpanel/internal/auth"
 	"palpanel/internal/config"
 	"palpanel/internal/db"
+	"palpanel/internal/event"
 	"palpanel/internal/instance"
+	"palpanel/internal/job"
 )
 
-// newTestRouter 返回路由、auth 服务与数据库句柄（测试按需取用）。
-func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service, *sql.DB) {
+// newTestDeps 返回路由与完整 Deps（含 Hub/Jobs，供 WS 等测试按需取用）。
+func newTestDeps(t *testing.T) (*gin.Engine, Deps) {
 	t.Helper()
 	dir := t.TempDir()
 	d, err := db.Open(dir)
@@ -35,16 +37,25 @@ func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service, *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := auth.New(d, secret)
-	r := New(Deps{
+	hub := event.NewHub()
+	deps := Deps{
 		Cfg:       config.Config{Listen: ":0", DataDir: dir},
 		DB:        d,
-		Auth:      svc,
+		Auth:      auth.New(d, secret),
 		Audit:     audit.New(d),
 		Secret:    secret,
 		Instances: instance.New(d),
-	})
-	return r, svc, d
+		Hub:       hub,
+		Jobs:      job.NewManager(hub),
+	}
+	return New(deps), deps
+}
+
+// newTestRouter 返回路由、auth 服务与数据库句柄（测试按需取用）。
+func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service, *sql.DB) {
+	t.Helper()
+	r, deps := newTestDeps(t)
+	return r, deps.Auth, deps.DB
 }
 
 func decode(t *testing.T, body []byte) map[string]any {
