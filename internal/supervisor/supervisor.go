@@ -91,7 +91,8 @@ type Manager struct {
 	StartFn Starter
 	Killer  func(pid int) error
 	LogRoot string
-	Prober  Prober
+	// Prober 启动探活器；须在首次 Start 之前注入（Start 后替换不生效）。
+	Prober Prober
 
 	// 可调参数（测试注入；零值时经 getter 取生产默认值）。
 	ProbeInterval      time.Duration
@@ -156,7 +157,7 @@ func (m *Manager) stopGraceWait() time.Duration {
 	return 35 * time.Second
 }
 
-// SetProber 注入启动探活器。
+// SetProber 注入启动探活器。必须在首次 Start 之前调用（Start 后替换不生效）。
 func (m *Manager) SetProber(p Prober) { m.Prober = p }
 
 // SetHooks 注册实例的优雅停机钩子（API 层在实例配置就绪后调用）。
@@ -242,8 +243,9 @@ func (m *Manager) Start(id int64) error {
 	return nil
 }
 
-// Stop 优雅停机链：REST(35s) → RCON(5s) → 等 StopGraceWait → Killer 强杀。
+// Stop 优雅停机链：REST(StopGraceWait) → RCON(5s) → 等 StopGraceWait → Killer 强杀。
 // stopReq 标志 + 等 done + Killer 兜底；done 只由 loop 关闭。
+// stopReq 的消费点：StartFn 返回后立即、探活每轮迭代、退避等待期（均可中断中止）。
 func (m *Manager) Stop(id int64) error {
 	m.mu.Lock()
 	pi, ok := m.procs[id]
@@ -275,7 +277,7 @@ func (m *Manager) Stop(id int64) error {
 	// 优雅链：REST 失败或缺失 → RCON；两者皆缺/皆败 → 无优雅手段，直接等/杀。
 	graceful := false
 	if hooks.REST != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), m.stopGraceWait())
 		err := hooks.REST(ctx)
 		cancel()
 		if err == nil {
@@ -309,26 +311,44 @@ func (m *Manager) Stop(id int64) error {
 	return nil
 }
 
+// probeResult 是启动期（StartFn 返回后）的结论。
+type probeResult int
+
+const (
+	probeSuccess probeResult = iota // 探活通过，进入 running
+	probeTimeout                    // 探活超时（probe 内已记 stopReq 并强杀）
+	probeStopped                    // Stop 已发起（stopReq 命中，probe 内已强杀）
+)
+
 // loop 是守护循环：外层 for 为重启轮（attempt 计数），内层为单轮生命周期。
-// done 通道只在本函数（含其直接调用路径）关闭。
+// done 通道按轮管理：轮 0 沿用 Start 创建的占位，后续每轮在轮顶重建；
+// 每轮恰有一条互斥出口关闭本轮 done 一次——不存在跨轮 double close。
+// done 只在本函数（含其直接调用路径）关闭。
 func (m *Manager) loop(pi *procInfo) {
+	firstRound := true
 	for {
-		// 重启轮入口：Stop 已发起则不再拉起（首轮 stopReq 恒为 false）
+		// 轮顶：重建本轮 done（杜绝上一轮已关闭的通道被复用），
+		// 并检查 Stop 是否已在退避期发起（首轮 stopReq 恒为 false）。
+		if !firstRound {
+			m.mu.Lock()
+			pi.done = make(chan struct{})
+			m.mu.Unlock()
+		}
+		firstRound = false
 		m.mu.Lock()
 		stopReq := pi.stopReq
 		m.mu.Unlock()
-		if stopReq {
-			m.transition(pi, StateIdle)
-			m.terminate(pi)
+		if stopReq { // 退避期 Stop：不再拉起，直接收尾
+			m.finishIdle(pi)
+			close(pi.done)
 			return
 		}
 
 		p, out, err := m.StartFn(pi.inst, ArgsFor(pi.inst))
 		if err != nil {
-			m.transition(pi, StateIdle)
 			m.Hub.Broadcast(event.Event{Type: "instance.error", InstanceID: pi.inst.ID,
 				Payload: "启动失败: " + err.Error()})
-			m.terminate(pi)
+			m.finishIdle(pi)
 			close(pi.done) // 唤醒可能等待的 Stop
 			return
 		}
@@ -337,16 +357,26 @@ func (m *Manager) loop(pi *procInfo) {
 		m.mu.Lock()
 		pi.p = p
 		pi.startedAt = time.Now()
-		pi.done = make(chan struct{})
 		m.mu.Unlock()
 		m.transition(pi, StateStarting)
 
 		m.pipeLogs(pi.inst.ID, out)
 
-		// 探活：成功 → running；超时 → 记 stopReq、杀进程，Wait 收尾后回 idle
-		probeOK := m.probe(pi, p)
+		// StartFn 返回后立即消费 stopReq：覆盖“StartFn 阻塞期间的 Stop”，
+		// 避免进程照常进入 running。
+		m.mu.Lock()
+		stopReq = pi.stopReq
+		m.mu.Unlock()
+		res := probeSuccess
+		if stopReq {
+			_ = m.Killer(p.Pid())
+			res = probeStopped
+		} else {
+			// 探活：成功 → running；超时/Stop 命中 → 已强杀，走 idle 收尾
+			res = m.probe(pi, p)
+		}
 
-		if probeOK {
+		if res == probeSuccess {
 			m.transition(pi, StateRunning)
 		}
 
@@ -354,11 +384,10 @@ func (m *Manager) loop(pi *procInfo) {
 		// 保证 Stop 等 done 返回时状态已最终一致。
 		waitErr := p.Wait()
 
-		if !probeOK {
-			m.transition(pi, StateIdle)
+		if res == probeTimeout {
 			m.Hub.Broadcast(event.Event{Type: "instance.error", InstanceID: pi.inst.ID,
 				Payload: "启动探活超时"})
-			m.terminate(pi)
+			m.finishIdle(pi)
 			close(pi.done)
 			return
 		}
@@ -366,19 +395,17 @@ func (m *Manager) loop(pi *procInfo) {
 		m.mu.Lock()
 		stopReq = pi.stopReq
 		m.mu.Unlock()
-		if stopReq || waitErr == nil { // 主动停机或正常退出 → idle
-			m.transition(pi, StateIdle)
-			m.terminate(pi)
+		if stopReq || waitErr == nil { // 主动停机（含探活期 Stop）或正常退出 → idle
+			m.finishIdle(pi)
 			close(pi.done)
 			return
 		}
 
 		// 崩溃路径
 		if !pi.inst.Autostart {
-			m.transition(pi, StateIdle)
 			m.Hub.Broadcast(event.Event{Type: "instance.crashed", InstanceID: pi.inst.ID,
 				Payload: fmt.Sprintf("进程异常退出: %v", waitErr)})
-			m.terminate(pi)
+			m.finishIdle(pi)
 			close(pi.done)
 			return
 		}
@@ -390,20 +417,45 @@ func (m *Manager) loop(pi *procInfo) {
 		restarts := pi.restarts
 		m.mu.Unlock()
 		if giveUp {
-			m.transition(pi, StateIdle)
 			m.Hub.Broadcast(event.Event{Type: "instance.crashed", InstanceID: pi.inst.ID,
 				Payload: fmt.Sprintf("连续崩溃 %d 次，放弃重启: %v", restarts, waitErr)})
-			m.terminate(pi)
+			m.finishIdle(pi)
 			close(pi.done)
 			return
 		}
 		m.transition(pi, StateStarting)
 		close(pi.done) // 本轮结束，进入退避等待
-		time.Sleep(m.backoff(restarts))
+		if m.abortedDuringBackoff(pi, m.backoff(restarts)) {
+			// 退避期 Stop：立即收尾落 idle，不睡满退避（本轮 done 已关闭）
+			m.finishIdle(pi)
+			return
+		}
 	}
 }
 
-// backoff 计算第 restarts 次重启前的退避时长：base, 2base, 4base... 上限 10 分钟。
+// abortedDuringBackoff 可中断退避：限时等待，每 100ms 轮询 stopReq，
+// 命中返回 true（调用方立即收尾），到点返回 false（继续下一轮）。
+func (m *Manager) abortedDuringBackoff(pi *procInfo, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		m.mu.Lock()
+		sr := pi.stopReq
+		m.mu.Unlock()
+		if sr {
+			return true
+		}
+		select {
+		case <-timer.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// backoff 计算第 restarts 次重启前的退避时长：base, 2base, 4base... 上限 5 分钟。
 func (m *Manager) backoff(restarts int) time.Duration {
 	d := m.restartBackoffBase()
 	if k := restarts - 1; k > 0 {
@@ -412,32 +464,43 @@ func (m *Manager) backoff(restarts int) time.Duration {
 		}
 		d = d * (1 << uint(k))
 	}
-	if d > 10*time.Minute {
-		d = 10 * time.Minute
+	if d > 5*time.Minute {
+		d = 5 * time.Minute
 	}
 	return d
 }
 
-// terminate 标记本轮守护终结：Status 仍可查（保留 restarts 计数），不阻塞再 Start。
-func (m *Manager) terminate(pi *procInfo) {
+// finishIdle 终态收尾：锁内原子落 state 与 terminated，
+// 保证外部观察到 State==idle 时 Status 必已无 PID、且 Start 不再被视为运行中。
+func (m *Manager) finishIdle(pi *procInfo) {
 	m.mu.Lock()
+	pi.state = StateIdle
 	pi.terminated = true
 	m.mu.Unlock()
+	m.setState(pi.inst.ID, StateIdle)
 }
 
 // probe 启动探活：Prober 未注入时等待 2s 即视为就绪；
-// 注入后按 ProbeInterval 轮询，累计超过 ProbeTimeout 记 stopReq 并强杀，返回 false。
-func (m *Manager) probe(pi *procInfo, p RunningProcess) bool {
+// 注入后按 ProbeInterval 轮询，每轮迭代先消费 stopReq（Stop 命中 → 取消探活、
+// 强杀，返回 probeStopped），累计超过 ProbeTimeout 记 stopReq 并强杀（probeTimeout）。
+func (m *Manager) probe(pi *procInfo, p RunningProcess) probeResult {
 	if m.Prober == nil {
 		time.Sleep(2 * time.Second)
-		return true
+		return probeSuccess
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.probeTimeout())
 	defer cancel() // 探活 ctx 必须取消，防泄漏
 	for {
+		m.mu.Lock()
+		sr := pi.stopReq
+		m.mu.Unlock()
+		if sr { // 探活期 Stop：取消探活、杀进程
+			_ = m.Killer(p.Pid())
+			return probeStopped
+		}
 		err := m.Prober.Probe(ctx, pi.inst)
 		if err == nil {
-			return true
+			return probeSuccess
 		}
 		select {
 		case <-ctx.Done(): // 探活超时：杀进程，回 idle
@@ -445,7 +508,7 @@ func (m *Manager) probe(pi *procInfo, p RunningProcess) bool {
 			pi.stopReq = true
 			m.mu.Unlock()
 			_ = m.Killer(p.Pid())
-			return false
+			return probeTimeout
 		case <-time.After(m.probeInterval()):
 		}
 	}

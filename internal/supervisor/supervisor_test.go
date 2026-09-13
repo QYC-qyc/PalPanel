@@ -488,3 +488,144 @@ func TestDefaultsWhenFieldsZero(t *testing.T) {
 		t.Fatalf("MaxRestarts=2 被默认值覆盖为 %d", m.maxRestarts())
 	}
 }
+
+// ---- 回归：重启轮 StartFn 失败不 double close panic ----
+
+func TestRestartRoundStartFnFailureNoPanic(t *testing.T) {
+	env := newTestManager(t, nil)
+	id := env.seedInstance(t, true) // autostart=true → 进入重启轮
+	env.m.SetProber(fakeProber{nil})
+	env.m.RestartBackoffBase = 5 * time.Millisecond
+	env.m.MaxRestarts = 5
+
+	origStart := env.m.StartFn
+	var mu sync.Mutex
+	var n int
+	env.m.StartFn = func(inst instance.Instance, args []string) (RunningProcess, io.ReadCloser, error) {
+		mu.Lock()
+		n++
+		call := n
+		mu.Unlock()
+		if call == 2 {
+			// 仅重启轮（第 2 次调用）拉起失败；后续调用正常（供重新 Start 用）
+			return nil, nil, errors.New("port already in use")
+		}
+		return origStart(inst, args)
+	}
+	sub, cancel := env.hub.Subscribe()
+	defer cancel()
+
+	if err := env.m.Start(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	env.proc(0).finish(errors.New("boom")) // 崩溃 → 重启轮 StartFn 失败
+
+	// 修复前此处 loop goroutine double close panic 击穿测试进程
+	waitState(t, env, id, "idle", 3*time.Second)
+	waitEvent(t, sub, "instance.error", 3*time.Second)
+	if env.dbStatus(t, id) != "idle" {
+		t.Fatalf("DB status=%q", env.dbStatus(t, id))
+	}
+	st, ok := env.m.Status(id)
+	if !ok || st.Restarts != 1 {
+		t.Fatalf("Status=%+v ok=%v，want Restarts=1", st, ok)
+	}
+	if n := env.procCount(); n != 1 {
+		t.Fatalf("启动轮数=%d，want 1（重启轮未拉起）", n)
+	}
+	// 终止后仍可重新 Start
+	if err := env.m.Start(id); err != nil {
+		t.Fatalf("重新 Start 应成功，got %v", err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	_ = env.m.Stop(id)
+	waitState(t, env, id, "idle", 3*time.Second)
+}
+
+// ---- 回归：StartFn 返回前 Stop，进程不得进入 running ----
+
+func TestStopDuringStartFnAbortsStart(t *testing.T) {
+	env := newTestManager(t, nil)
+	id := env.seedInstance(t, false)
+	env.m.SetProber(fakeProber{nil})
+	release := make(chan struct{})
+	origStart := env.m.StartFn
+	env.m.StartFn = func(inst instance.Instance, args []string) (RunningProcess, io.ReadCloser, error) {
+		<-release // 模拟启动器阻塞（解压/校验等）
+		return origStart(inst, args)
+	}
+	sub, cancel := env.hub.Subscribe()
+	defer cancel()
+
+	if err := env.m.Start(id); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // 确保 Stop 落在 StartFn 返回之前
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- env.m.Stop(id) }()
+	time.Sleep(20 * time.Millisecond) // Stop 已设 stopReq、阻塞在 StartFn 窗口
+	close(release)                    // StartFn 此时才返回，loop 应立即中止启动
+	if err := <-stopErr; err != nil {
+		t.Fatal(err)
+	}
+
+	waitState(t, env, id, "idle", 2*time.Second)
+	// 进程从未进入 running：Stop 返回前广播序列中不应出现 running
+	for {
+		select {
+		case e := <-sub:
+			if e.Type == "instance.status" && e.Payload == "running" {
+				t.Fatal("StartFn 返回前的 Stop 不应让进程进入 running")
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if st, ok := env.m.Status(id); !ok || st.PID != 0 {
+		t.Fatalf("Status=%+v ok=%v，启动被中止不应残留 PID", st, ok)
+	}
+	// 状态机仍可用
+	if err := env.m.Start(id); err != nil {
+		t.Fatalf("中止后 Start 应成功，got %v", err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	_ = env.m.Stop(id)
+	waitState(t, env, id, "idle", 3*time.Second)
+}
+
+// ---- 回归：退避期 Stop 状态及时落 idle（不睡满退避） ----
+
+func TestStopDuringBackoffSettlesIdle(t *testing.T) {
+	env := newTestManager(t, nil)
+	id := env.seedInstance(t, true)
+	env.m.SetProber(fakeProber{nil})
+	env.m.RestartBackoffBase = 1 * time.Second // 退避 1s，期间 Stop 必须能中断
+	env.m.MaxRestarts = 1
+
+	if err := env.m.Start(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	env.proc(0).finish(errors.New("boom")) // 崩溃 → restarts=1 → 退避 1s
+	time.Sleep(30 * time.Millisecond)      // 落入退避窗口
+
+	start := time.Now()
+	if err := env.m.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "idle", 500*time.Millisecond) // 修复前需睡满 1s 退避
+	if el := time.Since(start); el > 500*time.Millisecond {
+		t.Fatalf("退避期 Stop 落定耗时 %v，退避未被中断", el)
+	}
+	if st, ok := env.m.Status(id); !ok || st.Restarts != 1 {
+		t.Fatalf("Status=%+v ok=%v，want Restarts=1", st, ok)
+	}
+	if n := env.procCount(); n != 1 {
+		t.Fatalf("启动轮数=%d，退避期 Stop 不应再拉起新一轮", n)
+	}
+	if env.dbStatus(t, id) != "idle" {
+		t.Fatalf("DB status=%q", env.dbStatus(t, id))
+	}
+}
