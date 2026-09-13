@@ -50,6 +50,4 @@ Apache-2.0（见 [LICENSE](LICENSE)）
 
 ## 文档
 
-- [开发约定与依赖许可](docs/DEVELOPMENT.md)
-- [设计文档](docs/superpowers/specs/2026-09-13-palworld-panel-design.md)
-- [生态调研](docs/research/2026-09-13-帕鲁面板生态调研.md)
+设计文档、开发约定与依赖许可核查维护于仓库本地 `docs/` 目录（不随公开仓库分发）。
