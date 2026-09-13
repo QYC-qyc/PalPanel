@@ -6,8 +6,11 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,6 +19,10 @@ import (
 
 	"palpanel/internal/auth"
 	"palpanel/internal/cronexpr"
+	"palpanel/internal/instance"
+	"palpanel/internal/job"
+	"palpanel/internal/scheduler"
+	"palpanel/internal/supervisor"
 )
 
 // ScheduleReloader 是调度器热加载的最小接口（生产 *scheduler.Scheduler，测试注入 fake）。
@@ -231,4 +238,76 @@ func (d Deps) handleScheduleDelete(c *gin.Context) {
 	d.audit(c, in.ID, "schedule.manage", "删除定时任务 #"+strconv.FormatInt(sid, 10))
 	d.reloadSched()
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// RunScheduled 是调度器的执行体分派（main 装配为 scheduler.RunFunc 注入）：
+// backup→定时备份（type=scheduled）；broadcast→REST Announce 优先、失败退 RCON；
+// restart→停服（容忍未运行）后拉起；update→复用 runUpdateJob（含 restore 互斥，
+// 同 kind 去重时视为跳过不算失败）。实例已删除时返回错误由调度器记日志。
+func (d Deps) RunScheduled(row scheduler.SchedulesRow) error {
+	inst, err := d.Instances.Get(row.InstanceID)
+	if err != nil {
+		return fmt.Errorf("实例 %d 不存在或查询失败: %w", row.InstanceID, err)
+	}
+	switch row.Kind {
+	case "backup":
+		// 恢复任务会清空存档目录，与其并发打包会打出半清空的备份包：跳过本周期
+		if d.Jobs != nil && d.Jobs.RunningOfKind(inst.ID, "restore") {
+			return errors.New("恢复任务进行中，跳过本次定时备份")
+		}
+		if d.BackupSvc == nil {
+			return errors.New("备份服务未配置")
+		}
+		_, err := d.BackupSvc.RunBackup(context.Background(), inst, "scheduled", "定时备份")
+		return err
+	case "broadcast":
+		return d.runScheduledBroadcast(inst, row.Payload)
+	case "restart":
+		// 与 API 启动端点同源互斥：恢复/更新期间定时重启会把实例在存档被覆写时拉起
+		if d.Jobs != nil && (d.Jobs.RunningOfKind(inst.ID, "restore") || d.Jobs.RunningOfKind(inst.ID, "update")) {
+			return errors.New("恢复/更新任务进行中，跳过本次定时重启")
+		}
+		if d.Sup != nil {
+			if err := d.Sup.Stop(inst.ID); err != nil && !errors.Is(err, supervisor.ErrNotRunning) {
+				return fmt.Errorf("停服失败: %w", err)
+			}
+		}
+		return d.StartInstance(inst.ID)
+	case "update":
+		if d.Installer == nil || d.Jobs == nil {
+			return errors.New("安装服务未配置")
+		}
+		if _, err := d.Jobs.Start("update", inst.ID, func(ctx context.Context, report func(int, string)) error {
+			return d.runUpdateJob(ctx, inst, report)
+		}); errors.Is(err, job.ErrDuplicate) {
+			return nil // 本周期已有更新在跑：跳过（防重语义，不算失败）
+		} else {
+			return err
+		}
+	default:
+		return fmt.Errorf("未知任务类型 %q", row.Kind)
+	}
+}
+
+// runScheduledBroadcast 定时广播：payload 形如 {"message":"..."}；
+// REST 官方网关优先，失败退 RCON Broadcast（两者皆败返回错误由调度器记日志）。
+func (d Deps) runScheduledBroadcast(inst instance.Instance, payload string) error {
+	var p struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil || p.Message == "" {
+		return errors.New("广播 payload 不合法：需要 {\"message\":\"...\"}")
+	}
+	ctx := context.Background()
+	if client, err := d.restClient(inst); err == nil {
+		if err := client.Announce(ctx, p.Message); err == nil {
+			return nil
+		}
+	}
+	if conn, err := d.rconClient(inst); err == nil {
+		_, execErr := conn.Exec("Broadcast " + p.Message)
+		_ = conn.Close()
+		return execErr
+	}
+	return errors.New("REST 与 RCON 均不可用，广播未送达")
 }

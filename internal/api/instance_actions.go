@@ -32,6 +32,10 @@ import (
 // ErrUpdateInProgress：更新任务运行中拒绝启动实例（handleInstanceStart 映射 409）。
 var ErrUpdateInProgress = errors.New("更新进行中，暂不能启动")
 
+// ErrRestoreInProgress：恢复任务运行中拒绝启动实例（恢复会清空并覆写存档目录，
+// 运行中的服务端可能同时写存档；handleInstanceStart 映射 409）。
+var ErrRestoreInProgress = errors.New("恢复任务进行中，暂不能启动")
+
 // Installer 是安装/更新服务的最小接口（生产注入 *installer.Service，测试注入 fake）。
 type Installer interface {
 	Install(ctx context.Context, gameDir string, report func(progress int, message string), onLine func(string)) error
@@ -204,10 +208,17 @@ func (d Deps) handleInstanceStart(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 互斥：更新 job 运行中不允许启动（steamcmd 正在覆写文件，进程拉起必然异常）
-	if d.Jobs != nil && d.Jobs.RunningOfKind(id, "update") {
-		fail(c, http.StatusConflict, ErrUpdateInProgress.Error())
-		return
+	// 互斥：更新/恢复 job 运行中不允许启动（steamcmd 正在覆写文件或存档正被恢复，
+	// 进程拉起必然异常）
+	if d.Jobs != nil {
+		if d.Jobs.RunningOfKind(id, "update") {
+			fail(c, http.StatusConflict, ErrUpdateInProgress.Error())
+			return
+		}
+		if d.Jobs.RunningOfKind(id, "restore") {
+			fail(c, http.StatusConflict, ErrRestoreInProgress.Error())
+			return
+		}
 	}
 	if err := d.startSup(id); errors.Is(err, supervisor.ErrAlreadyRunning) {
 		fail(c, http.StatusConflict, err.Error())
@@ -313,6 +324,12 @@ func (d Deps) handleInstanceUpdateCheck(c *gin.Context) {
 // 中止更新）→ SteamCMD 更新；更新后保持停止。handleInstanceUpdate 与调度器
 // update 分派（M3-T9）共用；备份服务未装配时跳过备份步骤。
 func (d Deps) runUpdateJob(ctx context.Context, inst instance.Instance, report func(int, string)) error {
+	// 互斥（M3-T6 审查承接）：恢复任务会清空并覆写存档目录，与更新（含其
+	// pre-update 备份）并发会打出半清空状态的备份包，故更新开始时恢复在跑即中止。
+	// API 触发与调度器 update 分派（RunScheduled）共用本函数，两种入口都被覆盖。
+	if d.Jobs != nil && d.Jobs.RunningOfKind(inst.ID, "restore") {
+		return errors.New("恢复任务进行中，暂不能更新")
+	}
 	st, found := d.Sup.Status(inst.ID)
 	if found && (st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {
 		report(5, "优雅停服中")

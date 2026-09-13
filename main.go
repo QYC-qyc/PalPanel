@@ -22,6 +22,7 @@ import (
 	"palpanel/internal/instance"
 	"palpanel/internal/installer"
 	"palpanel/internal/job"
+	"palpanel/internal/scheduler"
 	"palpanel/internal/steamcmd"
 	"palpanel/internal/supervisor"
 )
@@ -157,6 +158,12 @@ func main() {
 	}
 	// 探活器须在首次 Start 之前注入
 	sup.SetProber(restProber{restFor: deps.RESTFor})
+
+	// 定时任务调度器：执行体经 api.Deps.RunScheduled 分派
+	// （backup/broadcast/restart/update），根 context 驱动，随进程退出结束。
+	sched := scheduler.New(database, deps.RunScheduled)
+	deps.Sched = sched
+	go sched.Start(context.Background())
 
 	// autostart：组件全部就绪后拉起标记实例（Sup.Start 异步返回，不阻断监听）
 	autostart(instStore, deps.StartInstance)
