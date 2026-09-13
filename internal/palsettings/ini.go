@@ -180,10 +180,15 @@ func gameConfigRelPath() []string {
 	return []string{"Pal", "Saved", "Config", platform, "PalWorldSettings.ini"}
 }
 
+// GameINIPath 返回游戏 ini 完整路径（供 API 层做存在性/mtime 判断）。
+func GameINIPath(gameDir string) string {
+	return filepath.Join(append([]string{gameDir}, gameConfigRelPath()...)...)
+}
+
 // LoadGameINI 读取 <gameDir>/Pal/Saved/Config/<Platform>/PalWorldSettings.ini
 // 并解析为键值对。文件不存在返回空 map + nil（新实例首次无 ini 属合法状态）。
 func LoadGameINI(gameDir string) (map[string]string, error) {
-	p := filepath.Join(append([]string{gameDir}, gameConfigRelPath()...)...)
+	p := GameINIPath(gameDir)
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -200,7 +205,7 @@ func LoadGameINI(gameDir string) (map[string]string, error) {
 
 // SaveGameINI 将 content 原样写入游戏 ini 路径（自动创建目录）。
 func SaveGameINI(gameDir string, content string) error {
-	p := filepath.Join(append([]string{gameDir}, gameConfigRelPath()...)...)
+	p := GameINIPath(gameDir)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("创建配置目录失败: %w", err)
 	}

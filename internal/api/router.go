@@ -59,6 +59,7 @@ func New(d Deps) *gin.Engine {
 	d.registerInstanceActions(v1)
 	d.registerBackup(v1)
 	d.registerSchedules(v1)
+	d.registerConfig(v1)
 	d.registerAudit(v1)
 	return r
 }
