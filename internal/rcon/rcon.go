@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 )
 
@@ -40,16 +39,32 @@ func Dial(ctx context.Context, addr, password string) (*Conn, error) {
 		c.Close()
 		return nil, err
 	}
-	id, _, _, err := conn.read()
-	if err != nil {
-		c.Close()
-		return nil, err
+	// 鉴权读放入 goroutine，主流程 select ctx：服务端 accept 后不回包时
+	// 不再永久挂起，超时/取消即关闭连接并报错。
+	type authRes struct {
+		id  int32
+		err error
 	}
-	if id == -1 {
+	ch := make(chan authRes, 1)
+	go func() {
+		id, _, _, err := conn.read()
+		ch <- authRes{id, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			c.Close()
+			return nil, r.err
+		}
+		if r.id == -1 {
+			c.Close()
+			return nil, ErrAuth
+		}
+		return conn, nil
+	case <-ctx.Done():
 		c.Close()
-		return nil, ErrAuth
+		return nil, fmt.Errorf("RCON 鉴权读超时或被取消: %w", ctx.Err())
 	}
-	return conn, nil
 }
 
 // write 发送一帧：size = 8+len(body)+2，正文尾部补两个 NUL。
@@ -89,7 +104,9 @@ func (c *Conn) read() (int32, int32, string, error) {
 
 // Exec 发送命令并等待同 id 的响应包；乱序包（部分服务端先回空包）直接忽略。
 func (c *Conn) Exec(cmd string) (string, error) {
-	id := atomic.AddInt32(&c.seq, 1)
+	// Conn 非并发安全，串行使用：普通自增即可，无需原子操作
+	c.seq++
+	id := c.seq
 	if err := c.write(id, typeCommand, cmd); err != nil {
 		return "", err
 	}

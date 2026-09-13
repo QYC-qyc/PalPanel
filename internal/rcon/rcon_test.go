@@ -92,6 +92,49 @@ func TestAuthAndExec(t *testing.T) {
 	}
 }
 
+// TestDialAuthReadTimeout：假服务 accept 后只读不应答，Dial 的鉴权读必须被
+// ctx 超时打断并返回错误，而非永久挂起（测试自带 3s 总超时兜底）。
+func TestDialAuthReadTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 64)
+				for { // 只消费请求，永不回包
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		_, err := Dial(ctx, ln.Addr().String(), "pw")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want error on auth read timeout, got nil")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Dial 未随 ctx 超时返回（鉴权读疑似挂起）")
+	}
+}
+
 func TestAuthFailure(t *testing.T) {
 	addr := startFakeServer(t, "secret", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
