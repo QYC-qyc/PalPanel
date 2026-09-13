@@ -147,3 +147,103 @@ func (s *Service) Can(userID int64, code string, instanceID int64) (bool, error)
 		instanceID, userID, userID).Scan(&n)
 	return n > 0, err
 }
+
+// BumpRole 使该角色全部用户的现有 token 失效。
+func (s *Service) BumpRole(roleID int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET role_version=role_version+1 WHERE id IN
+		(SELECT user_id FROM user_roles WHERE role_id=?)`, roleID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceUserRoles 整体替换用户的角色并 bump 其 role_version。
+func (s *Service) ReplaceUserRoles(userID int64, roleIDs []int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM user_roles WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	for _, rid := range roleIDs {
+		if _, err := tx.Exec(`INSERT INTO user_roles(user_id, role_id) VALUES(?,?)`, userID, rid); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role_version=role_version+1 WHERE id=?`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceUserGrants 整体替换用户的实例授权并 bump 其 role_version。
+func (s *Service) ReplaceUserGrants(userID int64, instanceIDs []int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instance_grants WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	for _, iid := range instanceIDs {
+		if _, err := tx.Exec(`INSERT INTO instance_grants(user_id, instance_id) VALUES(?,?)`, userID, iid); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role_version=role_version+1 WHERE id=?`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceRolePermissions 整体替换角色的权限码，并 bump 该角色全部用户。
+func (s *Service) ReplaceRolePermissions(roleID int64, codes []string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM role_permissions WHERE role_id=?`, roleID); err != nil {
+		return err
+	}
+	for _, code := range codes {
+		if _, err := tx.Exec(`INSERT INTO role_permissions(role_id, code) VALUES(?,?)`, roleID, code); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role_version=role_version+1 WHERE id IN
+		(SELECT user_id FROM user_roles WHERE role_id=?)`, roleID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceRoleGrants 整体替换角色的实例授权，并 bump 该角色全部用户。
+func (s *Service) ReplaceRoleGrants(roleID int64, instanceIDs []int64) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instance_grants WHERE role_id=?`, roleID); err != nil {
+		return err
+	}
+	for _, iid := range instanceIDs {
+		if _, err := tx.Exec(`INSERT INTO instance_grants(role_id, instance_id) VALUES(?,?)`, roleID, iid); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE users SET role_version=role_version+1 WHERE id IN
+		(SELECT user_id FROM user_roles WHERE role_id=?)`, roleID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

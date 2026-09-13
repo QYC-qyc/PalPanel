@@ -33,6 +33,24 @@ var AllPermissions = []string{
 	PScheduleManage,
 }
 
+// AllPermissionsWithout 返回排除 exclude 之后的全部权限码（角色编辑用）。
+func AllPermissionsWithout(exclude ...string) []string {
+	var out []string
+	for _, p := range AllPermissions {
+		skip := false
+		for _, e := range exclude {
+			if p == e {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 var builtinRoles = []struct {
 	Name, Desc string
 	Perms      []string
