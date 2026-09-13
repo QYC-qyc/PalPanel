@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.superpowers
+.tmp
+data
+dist
+dist-bin
+docs
+*.db
+*.db-wal
+*.db-shm
+config.yaml
