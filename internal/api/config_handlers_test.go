@@ -206,6 +206,23 @@ func TestConfigPutWritesINIAndAudit(t *testing.T) {
 		strings.Contains(detail, "ServerName") {
 		t.Fatalf("审计 detail 应为变更键列表（不含空串键）: %q", detail)
 	}
+	// C1：API 级往返——保存后的 ini 必须带段头，紧接的 GET 不报错且与写入一致
+	w2 := getJSON(r, "/api/v1/instances/"+itoa(id)+"/config", token)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PUT 后 GET config: %d %s", w2.Code, w2.Body.String())
+	}
+	values, _ := decode(t, w2.Body.Bytes())["values"].(map[string]any)
+	want := map[string]string{
+		"DayTimeSpeedRate": "2.000000",
+		"ServerName":       "My Server",     // 空串跳过 → 保留原值
+		"ServerPassword":   `p,w"q`,         // 转义往返
+		"CustomUnknown":    "xyz",           // 未管理键保留
+	}
+	for k, exp := range want {
+		if values[k] != exp {
+			t.Fatalf("往返 values[%q] = %q, 期望 %q", k, values[k], exp)
+		}
+	}
 }
 
 // ---- fake RCON 服务器（Source RCON 最小实现：回显 id/type=0） ----

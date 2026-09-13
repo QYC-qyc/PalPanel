@@ -58,6 +58,10 @@ type backupDTO struct {
 }
 
 func (d Deps) handleBackupList(c *gin.Context) {
+	if d.Backups == nil {
+		fail(c, http.StatusInternalServerError, "备份服务未配置")
+		return
+	}
 	in, ok := d.loadInstance(c)
 	if !ok {
 		return
@@ -186,6 +190,12 @@ func (d Deps) handleBackupDelete(c *gin.Context) {
 	}
 	bid, ok2 := parseSubID(c, "bid")
 	if !ok2 {
+		return
+	}
+	// 互斥：恢复 job 正在用该备份包还原存档（saves 已清空待回写），此时删除
+	// 备份会让恢复失败且存档丢失，必须等待恢复完成后再删。
+	if d.Jobs != nil && d.Jobs.RunningOfKind(in.ID, "restore") {
+		fail(c, http.StatusConflict, "恢复进行中，不能删除备份")
 		return
 	}
 	file, err := d.Backups.Delete(in.ID, bid)

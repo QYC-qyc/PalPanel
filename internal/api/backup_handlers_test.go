@@ -243,6 +243,62 @@ func TestBackupDeleteRemovesRowAndFile(t *testing.T) {
 	}
 }
 
+// I3：恢复进行中删除该备份包 → 409，库行与文件保留（否则 saves 已清空而恢复必然失败）。
+func TestBackupDeleteBlockedWhileRestoreRunning(t *testing.T) {
+	svc := newBlockingRestoreSvc()
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = svc
+	})
+	id := createInstance(t, r, token, t.TempDir())
+	bid := seedBackupRow(t, deps, id)
+
+	// 恢复 job 挂起（running）
+	w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/backup/"+itoa(bid)+"/restore", token, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST restore: %d %s", w.Code, w.Body.String())
+	}
+	restoreJob := decode(t, w.Body.Bytes())["job_id"].(string)
+	select {
+	case <-svc.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("恢复 job 未开始")
+	}
+
+	w = deleteJSON(r, "/api/v1/instances/"+itoa(id)+"/backup/"+itoa(bid), token)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("恢复中删除备份应 409: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "恢复进行中") {
+		t.Fatalf("409 应说明恢复进行中: %s", w.Body.String())
+	}
+	if _, err := deps.Backups.Get(id, bid); err != nil {
+		t.Fatalf("备份库行不应被删除: %v", err)
+	}
+
+	// 恢复结束后删除放行
+	close(svc.release)
+	waitJobState(t, deps, restoreJob, "done", 5*time.Second)
+	w = deleteJSON(r, "/api/v1/instances/"+itoa(id)+"/backup/"+itoa(bid), token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("恢复结束后删除备份应放行: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// 顺带：备份服务未装配（Backups == nil）时列表应 500 提示而非空指针 panic。
+func TestBackupListServiceNotConfigured(t *testing.T) {
+	r, _, token := setupAdmin(t) // 默认 Deps 未注入 Backups
+	id := createInstance(t, r, token, t.TempDir())
+
+	w := getJSON(r, "/api/v1/instances/"+itoa(id)+"/backup", token)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("Backups 未配置应 500: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "备份服务未配置") {
+		t.Fatalf("应提示备份服务未配置: %s", w.Body.String())
+	}
+}
+
 func TestBackupKeepCountCleanup(t *testing.T) {
 	r, deps, token := newBackupEnv(t, 1) // 只保留 1 份
 	dir := t.TempDir()

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -402,6 +403,8 @@ func (d Deps) stopOrphan(inst instance.Instance) {
 	}
 	if stopped {
 		_, _ = d.DB.Exec(`UPDATE instances SET status='idle' WHERE id=?`, inst.ID)
+	} else {
+		log.Printf("[instance %d] 残留进程优雅停机失败：REST/RCON 均未成功，进程可能仍在运行，请手动确认", inst.ID)
 	}
 }
 

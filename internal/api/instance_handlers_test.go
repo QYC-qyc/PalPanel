@@ -1,10 +1,14 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"palpanel/internal/backup"
 )
 
 // 创建 viewer 低权用户 + 一个实例，验证 grant 前后可见性与密码脱敏。
@@ -138,4 +142,72 @@ func TestInstanceDeleteCleansGrants(t *testing.T) {
 	if n := countRows(t, database, `SELECT COUNT(*) FROM instance_grants WHERE instance_id=?`, iid); n != 0 {
 		t.Fatalf("instance_grants residual rows: %d", n)
 	}
+}
+
+// I2：恢复 job 运行中删除实例应 409，且实例库行未删（避免孤儿行/竞态写）。
+func TestInstanceDeleteBlockedWhileRestoreRunning(t *testing.T) {
+	svc := newBlockingRestoreSvc()
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = svc
+	})
+	id := createInstance(t, r, token, t.TempDir())
+	bid := seedBackupRow(t, deps, id)
+
+	// 恢复 job 挂起（running）
+	w := postJSON(r, fmt.Sprintf("/api/v1/instances/%d/backup/%d/restore", id, bid), token, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST restore: %d %s", w.Code, w.Body.String())
+	}
+	restoreJob := decode(t, w.Body.Bytes())["job_id"].(string)
+	select {
+	case <-svc.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("恢复 job 未开始")
+	}
+
+	w = deleteJSON(r, "/api/v1/instances/"+itoa(id), token)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("恢复中删除实例应 409: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "进行中") {
+		t.Fatalf("409 应说明存在进行中的任务: %s", w.Body.String())
+	}
+	if n := countRows(t, deps.DB, `SELECT COUNT(*) FROM instances WHERE id=?`, id); n != 1 {
+		t.Fatalf("实例库行不应被删除，剩 %d", n)
+	}
+
+	// 恢复结束后删除放行
+	close(svc.release)
+	waitJobState(t, deps, restoreJob, "done", 5*time.Second)
+	if w := deleteJSON(r, "/api/v1/instances/"+itoa(id), token); w.Code != http.StatusOK {
+		t.Fatalf("恢复结束后删除应放行: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// I2：备份 job 运行中删除实例同样应 409。
+func TestInstanceDeleteBlockedWhileBackupRunning(t *testing.T) {
+	svc := newBlockingBackupSvc()
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = svc
+	})
+	id := createInstance(t, r, token, t.TempDir())
+
+	if w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/backup", token, map[string]string{}); w.Code != http.StatusOK {
+		t.Fatalf("POST backup: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-svc.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("备份 job 未开始")
+	}
+
+	if w := deleteJSON(r, "/api/v1/instances/"+itoa(id), token); w.Code != http.StatusConflict {
+		t.Fatalf("备份中删除实例应 409: %d %s", w.Code, w.Body.String())
+	}
+	if n := countRows(t, deps.DB, `SELECT COUNT(*) FROM instances WHERE id=?`, id); n != 1 {
+		t.Fatalf("实例库行不应被删除，剩 %d", n)
+	}
+	close(svc.release)
 }

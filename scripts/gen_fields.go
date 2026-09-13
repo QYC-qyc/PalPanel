@@ -5,8 +5,9 @@
 //
 //	go run ./scripts/gen_fields.go -in <实机ini路径> [-out internal/palsettings/fields.json]
 //
-// 解析复用 internal/palsettings.ParseINI（引号内逗号不切分、"" 转义），
-// 本工具只负责：括号列表值规范化、按 ini 出现序遍历键、逐键推断类型。
+// 解析复用 internal/palsettings.ParseINI（引号内逗号不切分、"" 转义、
+// 未加引号的括号列表值整段识别为单值），本工具只负责：
+// 按 ini 出现序遍历键、逐键推断类型。
 // 不手工编造任何键——全部来自实机 ini。
 package main
 
@@ -20,11 +21,6 @@ import (
 
 	"palpanel/internal/palsettings"
 )
-
-// 实机 ini 中 CrossplayPlatforms=(Steam,Xbox,PS5,Mac) 的值含未加引号的逗号，
-// ParseINI 会按逗号切断；生成前先把 =(…) 列表值规范化为带引号形式，
-// 使 ParseINI 能完整解析（输出时 Serialize 的 quoteValue 也会对称加引号）。
-var reParenValue = regexp.MustCompile(`=(\([^()]*\))`)
 
 var (
 	reInt   = regexp.MustCompile(`^-?\d+$`)
@@ -57,7 +53,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "读取 ini 失败: %v\n", err)
 		os.Exit(1)
 	}
-	content := reParenValue.ReplaceAllString(string(raw), `="$1"`)
+	// 括号列表值等形态的规范化已下沉到 palsettings.ParseINI（I1 修复），
+	// 这里直接解析原始 ini，不再预处理。
+	content := string(raw)
 
 	// 值的解析统一交给 palsettings.ParseINI（复用，不重写）
 	parsed, err := palsettings.ParseINI(content)
@@ -142,8 +140,9 @@ func optionSettingsBody(content string) string {
 	return line[open+1 : closing]
 }
 
-// scanOrderedPairs 按出现序提取键值对：引号内逗号不切分、"" 转义还原，
-// 与 ParseINI 的语义一致；仅用于补足 map 丢失的顺序，值经 ParseINI 交叉校验。
+// scanOrderedPairs 按出现序提取键值对：引号内逗号不切分、"" 转义还原、
+// 未加引号的括号列表值按括号深度整段识别（与 ParseINI 的语义一致）；
+// 仅用于补足 map 丢失的顺序，值经 ParseINI 交叉校验。
 func scanOrderedPairs(body string) ([][2]string, error) {
 	var out [][2]string
 	i, n := 0, len(body)
@@ -180,8 +179,17 @@ func scanOrderedPairs(body string) ([][2]string, error) {
 				i++
 			}
 		} else {
-			for i < n && body[i] != ',' {
-				sb.WriteByte(body[i])
+			depth := 0
+			for i < n {
+				c := body[i]
+				if c == '(' {
+					depth++
+				} else if c == ')' {
+					depth--
+				} else if c == ',' && depth == 0 {
+					break
+				}
+				sb.WriteByte(c)
 				i++
 			}
 		}

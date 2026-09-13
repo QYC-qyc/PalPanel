@@ -256,6 +256,15 @@ func (d Deps) handleInstanceDelete(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 互斥：备份/恢复/更新 job 运行中禁止删除实例——job 会继续写已删实例的
+	// 存档/备份目录并留下孤儿任务行，竞态不可控，必须等待其完成。
+	if d.Jobs != nil {
+		if d.Jobs.RunningOfKind(id, "backup") || d.Jobs.RunningOfKind(id, "restore") ||
+			d.Jobs.RunningOfKind(id, "update") {
+			fail(c, http.StatusConflict, "该实例有进行中的任务（备份/恢复/更新），请等待完成后再删除")
+			return
+		}
+	}
 	if err := d.Instances.Delete(id); errors.Is(err, instance.ErrNotFound) {
 		fail(c, http.StatusNotFound, "实例不存在")
 		return
