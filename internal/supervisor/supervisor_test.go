@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -456,6 +457,109 @@ func TestLogStreamToFileAndHub(t *testing.T) {
 	// 进程正常退出收尾，验证无 goroutine/句柄悬挂导致的卡死
 	env.proc(0).finish(nil)
 	waitState(t, env, id, "idle", 3*time.Second)
+}
+
+// ---- Critical 回归：StartFn 未注入时不得 nil panic ----
+
+// Start 同步返回 ErrNoStarter（New 文档契约"未注入时返回启动失败"）。
+func TestStartNilStartFnReturnsErrNoStarter(t *testing.T) {
+	env := newTestManager(t, nil)
+	env.m.StartFn = nil // 显式未注入
+	id := env.seedInstance(t, false)
+
+	if err := env.m.Start(id); !errors.Is(err, ErrNoStarter) {
+		t.Fatalf("StartFn 未注入时 Start 应返回 ErrNoStarter，got %v", err)
+	}
+	// 同步拒绝：不创建 procInfo（Status 查无此轮），DB 状态保持 idle
+	if _, ok := env.m.Status(id); ok {
+		t.Fatal("Start 被拒绝不应留下运行时状态条目")
+	}
+	if s := env.dbStatus(t, id); s != "idle" {
+		t.Fatalf("DB status=%q，want idle", s)
+	}
+	if env.procCount() != 0 {
+		t.Fatalf("未注入 StartFn 不应拉起进程，轮数=%d", env.procCount())
+	}
+}
+
+// loop 内兜底：覆盖"先注入、运行中被置 nil"的竞态注入时序。
+// wrapper 在 loop goroutine 内执行，同 goroutine 内改写 m.StartFn 无数据竞争。
+func TestLoopNilStartFnFallback(t *testing.T) {
+	env := newTestManager(t, nil)
+	id := env.seedInstance(t, true) // autostart=true → 崩溃后进入重启轮
+	env.m.SetProber(fakeProber{nil})
+	env.m.RestartBackoffBase = 5 * time.Millisecond // 缩短退避，加速进入重启轮
+	origStart := env.m.StartFn
+	env.m.StartFn = func(inst instance.Instance, args []string) (RunningProcess, io.ReadCloser, error) {
+		env.m.StartFn = nil // 首轮成功启动后置 nil，下一轮 loop 观察到
+		return origStart(inst, args)
+	}
+	sub, cancel := env.hub.Subscribe()
+	defer cancel()
+
+	if err := env.m.Start(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	env.proc(0).finish(errors.New("boom")) // 崩溃 → 重启轮 StartFn 为 nil
+
+	// 修复前此处 loop goroutine nil 函数调用 panic 击穿测试进程
+	waitState(t, env, id, "idle", 3*time.Second)
+	e := waitEvent(t, sub, "instance.error", 3*time.Second)
+	if !strings.Contains(fmt.Sprint(e.Payload), ErrNoStarter.Error()) {
+		t.Fatalf("instance.error payload=%v，应含 ErrNoStarter 文案", e.Payload)
+	}
+	if env.dbStatus(t, id) != "idle" {
+		t.Fatalf("DB status=%q", env.dbStatus(t, id))
+	}
+}
+
+// ---- Important 回归：优雅停机成功路径零强杀（存档安全） ----
+
+func TestStopGracefulSuccessNoKill(t *testing.T) {
+	env := newTestManager(t, nil)
+	id := env.seedInstance(t, false)
+	env.m.SetProber(fakeProber{nil})
+	env.m.StopGraceWait = time.Second
+	sub, cancel := env.hub.Subscribe()
+	defer cancel()
+
+	if err := env.m.Start(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "running", 3*time.Second)
+	env.m.SetHooks(id, StopHooks{
+		REST: func(ctx context.Context) error {
+			env.proc(0).finish(nil) // 模拟进程收到 REST 停服请求后自行退出
+			return nil
+		},
+	})
+	if err := env.m.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, env, id, "idle", 3*time.Second)
+	if env.killerCalls() != 0 {
+		t.Fatalf("优雅停机成功不应触发 Killer，实际 %d 次", env.killerCalls())
+	}
+	if env.proc(0).isKilled() {
+		t.Fatal("优雅停机成功路径进程不应被 Kill")
+	}
+	// 存档安全关键断言：成功停机不广播 instance.crashed
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case e := <-sub:
+			if e.Type == "instance.crashed" {
+				t.Fatalf("优雅停机成功不应广播 instance.crashed：%v", e.Payload)
+			}
+			continue
+		case <-deadline:
+		}
+		break
+	}
+	if env.dbStatus(t, id) != "idle" {
+		t.Fatalf("DB status=%q", env.dbStatus(t, id))
+	}
 }
 
 // ---- ArgsFor 纯函数 ----

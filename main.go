@@ -125,6 +125,7 @@ func main() {
 	instStore := instance.New(database)
 	sup := supervisor.New(database, instStore, hub)
 	sup.LogRoot = cfg.DataDir
+	sup.StartFn = supervisor.NewOSStarter // 生产启动器（os/exec + 树杀适配）
 
 	deps := api.Deps{
 		Cfg:       cfg,

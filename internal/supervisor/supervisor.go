@@ -39,6 +39,8 @@ var (
 	ErrAlreadyRunning = errors.New("实例已在运行")
 	ErrNotRunning     = errors.New("实例未在运行")
 	ErrNotFound       = errors.New("实例不存在")
+	// ErrNoStarter 表示 Manager.StartFn 未注入（生产装配遗漏），启动被拒绝。
+	ErrNoStarter = errors.New("进程启动器未配置")
 )
 
 // RunningProcess 是被守护的进程句柄抽象（生产由 os/exec 适配，测试用假实现）。
@@ -106,7 +108,7 @@ type Manager struct {
 	hooks map[int64]StopHooks
 }
 
-// New 创建管理器。StartFn 需调用方注入（未注入时 Start 返回启动失败）。
+// New 创建管理器。StartFn 需调用方注入（未注入时 Start 返回 ErrNoStarter）。
 func New(db *sql.DB, store *instance.Store, hub *event.Hub) *Manager {
 	return &Manager{
 		DB:    db,
@@ -215,6 +217,10 @@ func (m *Manager) Start(id int64) error {
 		return ErrAlreadyRunning
 	}
 	m.mu.Unlock()
+
+	if m.StartFn == nil { // 兑现 New 契约：未注入启动器时同步拒绝启动
+		return ErrNoStarter
+	}
 
 	inst, err := m.Store.Get(id) // 不持锁做 DB 调用
 	if err != nil {
@@ -344,7 +350,14 @@ func (m *Manager) loop(pi *procInfo) {
 			return
 		}
 
-		p, out, err := m.StartFn(pi.inst, ArgsFor(pi.inst))
+		var p RunningProcess
+		var out io.ReadCloser
+		err := error(nil)
+		if m.StartFn == nil { // 兜底：Start 后 StartFn 被置 nil 的竞态注入时序
+			err = ErrNoStarter
+		} else {
+			p, out, err = m.StartFn(pi.inst, ArgsFor(pi.inst))
+		}
 		if err != nil {
 			m.Hub.Broadcast(event.Event{Type: "instance.error", InstanceID: pi.inst.ID,
 				Payload: "启动失败: " + err.Error()})
