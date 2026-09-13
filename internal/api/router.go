@@ -6,12 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"palpanel/internal/audit"
+	"palpanel/internal/auth"
 	"palpanel/internal/config"
 )
 
 type Deps struct {
-	Cfg config.Config
-	DB  *sql.DB // Task 2 接入
+	Cfg    config.Config
+	DB     *sql.DB // Task 2 接入
+	Auth   *auth.Service
+	Audit  *audit.Recorder
+	Secret []byte
 }
 
 func New(d Deps) *gin.Engine {
@@ -19,6 +24,7 @@ func New(d Deps) *gin.Engine {
 	r.Use(gin.Recovery())
 	v1 := r.Group("/api/v1")
 	v1.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	d.registerAuth(v1)
 	return r
 }
 
