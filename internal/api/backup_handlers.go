@@ -94,10 +94,15 @@ func (d Deps) handleBackupCreate(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "参数不合法")
 		return
 	}
-	// 互斥（M3-T9 承接）：恢复任务会清空并覆写存档目录，与其并发打包会打出
-	// 半清空状态的备份包，故恢复在跑时拒绝手动备份。
+	// 互斥（M3-T9 承接 + fix round 1 对称补齐）：恢复（清空存档目录）与更新
+	// （steamcmd 覆写文件、含其 pre-update 备份）任一在跑，与其并发打包都会
+	// 打出半清空/半写入状态的备份包，拒绝手动备份。
 	if d.Jobs.RunningOfKind(in.ID, "restore") {
 		fail(c, http.StatusConflict, "恢复任务进行中，暂不能备份")
+		return
+	}
+	if d.Jobs.RunningOfKind(in.ID, "update") {
+		fail(c, http.StatusConflict, "更新进行中，暂不能备份")
 		return
 	}
 	jobID, err := d.Jobs.Start("backup", in.ID, func(ctx context.Context, report func(int, string)) error {

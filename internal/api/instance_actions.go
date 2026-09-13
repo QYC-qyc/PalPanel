@@ -324,11 +324,17 @@ func (d Deps) handleInstanceUpdateCheck(c *gin.Context) {
 // 中止更新）→ SteamCMD 更新；更新后保持停止。handleInstanceUpdate 与调度器
 // update 分派（M3-T9）共用；备份服务未装配时跳过备份步骤。
 func (d Deps) runUpdateJob(ctx context.Context, inst instance.Instance, report func(int, string)) error {
-	// 互斥（M3-T6 审查承接）：恢复任务会清空并覆写存档目录，与更新（含其
-	// pre-update 备份）并发会打出半清空状态的备份包，故更新开始时恢复在跑即中止。
+	// 互斥（M3-T6 审查承接 + fix round 1 对称补齐）：恢复会清空并覆写存档目录、
+	// 备份正在打包存档，与更新（含其 pre-update 备份）并发会互相破坏现场
+	// （半清空状态包/半写入文件），故更新开始时任一在跑即中止。
 	// API 触发与调度器 update 分派（RunScheduled）共用本函数，两种入口都被覆盖。
-	if d.Jobs != nil && d.Jobs.RunningOfKind(inst.ID, "restore") {
-		return errors.New("恢复任务进行中，暂不能更新")
+	if d.Jobs != nil {
+		if d.Jobs.RunningOfKind(inst.ID, "restore") {
+			return errors.New("恢复任务进行中，暂不能更新")
+		}
+		if d.Jobs.RunningOfKind(inst.ID, "backup") {
+			return errors.New("备份任务进行中，暂不能更新")
+		}
 	}
 	st, found := d.Sup.Status(inst.ID)
 	if found && (st.State == supervisor.StateRunning || st.State == supervisor.StateStarting) {

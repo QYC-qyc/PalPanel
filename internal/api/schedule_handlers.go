@@ -251,14 +251,25 @@ func (d Deps) RunScheduled(row scheduler.SchedulesRow) error {
 	}
 	switch row.Kind {
 	case "backup":
-		// 恢复任务会清空存档目录，与其并发打包会打出半清空的备份包：跳过本周期
-		if d.Jobs != nil && d.Jobs.RunningOfKind(inst.ID, "restore") {
-			return errors.New("恢复任务进行中，跳过本次定时备份")
+		// 恢复/更新会覆写存档，与其并发打包会打出半清空的备份包：跳过本周期
+		if d.Jobs != nil && (d.Jobs.RunningOfKind(inst.ID, "restore") || d.Jobs.RunningOfKind(inst.ID, "update")) {
+			return errors.New("恢复/更新任务进行中，跳过本次定时备份")
 		}
 		if d.BackupSvc == nil {
 			return errors.New("备份服务未配置")
 		}
-		_, err := d.BackupSvc.RunBackup(context.Background(), inst, "scheduled", "定时备份")
+		if d.Jobs == nil {
+			return errors.New("任务服务未配置")
+		}
+		// 统一走 job 体系：与手动备份同 kind 去重（ErrDuplicate → 跳过本周期不算
+		// 失败），且 RunningOfKind("backup") 能被 restore/update 的互斥检查感知。
+		_, err := d.Jobs.Start("backup", inst.ID, func(ctx context.Context, report func(int, string)) error {
+			_, err := d.BackupSvc.RunBackup(ctx, inst, "scheduled", "定时备份")
+			return err
+		})
+		if errors.Is(err, job.ErrDuplicate) {
+			return nil
+		}
 		return err
 	case "broadcast":
 		return d.runScheduledBroadcast(inst, row.Payload)
@@ -274,8 +285,11 @@ func (d Deps) RunScheduled(row scheduler.SchedulesRow) error {
 		}
 		return d.StartInstance(inst.ID)
 	case "update":
-		if d.Installer == nil || d.Jobs == nil {
+		if d.Installer == nil {
 			return errors.New("安装服务未配置")
+		}
+		if d.Jobs == nil {
+			return errors.New("任务服务未配置")
 		}
 		if _, err := d.Jobs.Start("update", inst.ID, func(ctx context.Context, report func(int, string)) error {
 			return d.runUpdateJob(ctx, inst, report)

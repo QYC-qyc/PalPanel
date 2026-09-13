@@ -552,3 +552,139 @@ func TestRunScheduledDispatch(t *testing.T) {
 		t.Fatal("未知任务类型应报错")
 	}
 }
+
+// ---- 备份互斥矩阵闭合（fix round 1）：backup↔restore↔update 两两互斥 ----
+
+// blockingBackupSvc 阻塞的备份服务：RunBackup 挂起直到 release，模拟打包中。
+type blockingBackupSvc struct {
+	fakeBackupSvc
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingBackupSvc() *blockingBackupSvc {
+	return &blockingBackupSvc{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *blockingBackupSvc) RunBackup(_ context.Context, _ instance.Instance, typ, _ string) (backup.BackupRecord, error) {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+	return backup.BackupRecord{Type: typ}, nil
+}
+
+func TestBackupBlockedWhileUpdateRunning(t *testing.T) {
+	release := make(chan struct{})
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = &fakeBackupSvc{}
+		d.Installer = blockingInstaller{release: release}
+	})
+	dir := t.TempDir()
+	id := createInstance(t, r, token, dir)
+
+	// 更新 job 挂起
+	if w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/update", token, nil); w.Code != http.StatusOK {
+		t.Fatalf("POST update: %d %s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !deps.Jobs.RunningOfKind(id, "update") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// 更新进行中 → 手动备份 409
+	if w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/backup", token, map[string]string{}); w.Code != http.StatusConflict {
+		t.Fatalf("更新中手动备份应 409: %d %s", w.Code, w.Body.String())
+	}
+	close(release)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && deps.Jobs.RunningOfKind(id, "update") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// 更新结束后放行
+	if w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/backup", token, map[string]string{}); w.Code != http.StatusOK {
+		t.Fatalf("更新结束后备份应放行: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateJobAbortsWhileBackupRunning(t *testing.T) {
+	release := make(chan struct{})
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = &fakeBackupSvc{}
+		d.Installer = fakeInstaller{installFn: func(_ context.Context, _ string, _ func(int, string), _ func(string)) error {
+			return nil
+		}}
+	})
+	dir := t.TempDir()
+	id := createInstance(t, r, token, dir)
+
+	// 起一个挂起的手动备份 job（模拟打包中）
+	if _, err := deps.Jobs.Start("backup", id, func(ctx context.Context, report func(int, string)) error {
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// update → job 层中止（failed，不执行安装/备份）
+	if w := postJSON(r, "/api/v1/instances/"+itoa(id)+"/update", token, nil); w.Code != http.StatusOK {
+		t.Fatalf("POST update: %d %s", w.Code, w.Body.String())
+	}
+	updateJob := findJob(t, deps, id, "update")
+	waitJobState(t, deps, updateJob.ID, "failed", 5*time.Second)
+	if !strings.Contains(updateJob.Error, "备份") {
+		t.Fatalf("update 应因备份进行中被中止: %+v", updateJob)
+	}
+	close(release)
+}
+
+func TestScheduledBackupGoesThroughJobs(t *testing.T) {
+	// ③ 定时备份与手动备份并发去重（ErrDuplicate → 跳过不算失败）
+	release := make(chan struct{})
+	fb := &fakeBackupSvc{}
+	r, deps, token := setupAdminCfg(t, func(d *Deps) {
+		d.Backups = backup.NewStore(d.DB)
+		d.BackupSvc = fb
+	})
+	dir := t.TempDir()
+	id := createInstance(t, r, token, dir)
+
+	if _, err := deps.Jobs.Start("backup", id, func(ctx context.Context, report func(int, string)) error {
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 手动备份 job 在跑 → 定时备份防重跳过，不执行 RunBackup
+	if err := deps.RunScheduled(scheduler.SchedulesRow{InstanceID: id, Kind: "backup"}); err != nil {
+		t.Fatalf("定时备份防重应返回 nil: %v", err)
+	}
+	if got := fb.Calls(); len(got) != 0 {
+		t.Fatalf("防重跳过时不应执行备份: %v", got)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && deps.Jobs.RunningOfKind(id, "backup") {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// ④ 定时备份走 job 体系后，restore 能经 RunningOfKind 感知 → 409
+	bid := seedBackupRow(t, deps, id)
+	svc := newBlockingBackupSvc()
+	deps.BackupSvc = svc
+	if err := deps.RunScheduled(scheduler.SchedulesRow{InstanceID: id, Kind: "backup"}); err != nil {
+		t.Fatalf("定时备份分派: %v", err)
+	}
+	select {
+	case <-svc.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("定时备份 job 未开始")
+	}
+	if w := postJSON(r, fmt.Sprintf("/api/v1/instances/%d/backup/%d/restore", id, bid), token, nil); w.Code != http.StatusConflict {
+		t.Fatalf("定时备份打包中恢复应 409: %d %s", w.Code, w.Body.String())
+	}
+	close(svc.release)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && deps.Jobs.RunningOfKind(id, "backup") {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
