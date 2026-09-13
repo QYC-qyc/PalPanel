@@ -62,12 +62,12 @@ func (s *Service) Setup(username, password string) (int64, error) {
 }
 
 type SessionUser struct {
-	ID          int64
-	Username    string
-	DisplayName string
-	IsActive    bool
-	RoleVersion int64
-	Roles       []string
+	ID          int64    `json:"id"`
+	Username    string   `json:"username"`
+	DisplayName string   `json:"display_name"`
+	IsActive    bool     `json:"is_active"`
+	RoleVersion int64    `json:"-"`
+	Roles       []string `json:"roles,omitempty"`
 }
 
 func (s *Service) Login(username, password string) (string, error) {

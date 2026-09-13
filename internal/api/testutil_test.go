@@ -42,16 +42,6 @@ func newTestRouter(t *testing.T) (*gin.Engine, *auth.Service) {
 	}), svc
 }
 
-func getJSON(r *gin.Engine, path, token string) *httptest.ResponseRecorder {
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", path, nil)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	r.ServeHTTP(w, req)
-	return w
-}
-
 func decode(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -61,11 +51,68 @@ func decode(t *testing.T, body []byte) map[string]any {
 	return m
 }
 
-func postJSON(r *gin.Engine, path string, body any) *httptest.ResponseRecorder {
-	b, _ := json.Marshal(body)
+func doJSON(r *gin.Engine, method, path, token string, body any) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		reader = bytes.NewReader(b)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", path, bytes.NewReader(b))
+	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	r.ServeHTTP(w, req)
 	return w
+}
+
+func getJSON(r *gin.Engine, path, token string) *httptest.ResponseRecorder {
+	return doJSON(r, "GET", path, token, nil)
+}
+
+func postJSON(r *gin.Engine, path, token string, body any) *httptest.ResponseRecorder {
+	return doJSON(r, "POST", path, token, body)
+}
+
+func patchJSON(r *gin.Engine, path, token string, body any) *httptest.ResponseRecorder {
+	return doJSON(r, "PATCH", path, token, body)
+}
+
+func putJSON(r *gin.Engine, path, token string, body any) *httptest.ResponseRecorder {
+	return doJSON(r, "PUT", path, token, body)
+}
+
+func deleteJSON(r *gin.Engine, path, token string) *httptest.ResponseRecorder {
+	return doJSON(r, "DELETE", path, token, nil)
+}
+
+// loginToken 用给定账号登录并返回 token。
+func loginToken(t *testing.T, r *gin.Engine, username, password string) string {
+	t.Helper()
+	w := postJSON(r, "/api/v1/login", "", map[string]string{"username": username, "password": password})
+	if w.Code != 200 {
+		t.Fatalf("login %s: %d %s", username, w.Code, w.Body.String())
+	}
+	return decode(t, w.Body.Bytes())["token"].(string)
+}
+
+// setupAdmin 完成 setup + login，返回路由、auth 服务与管理员 token。
+func setupAdmin(t *testing.T) (*gin.Engine, *auth.Service, string) {
+	t.Helper()
+	r, svc := newTestRouter(t)
+	postJSON(r, "/api/v1/setup", "", map[string]string{"username": "root", "password": "good-pass-1"})
+	return r, svc, loginToken(t, r, "root", "good-pass-1")
+}
+
+// operatorRoleID 直接查库取 operator 角色 ID（roles API 属后续任务）。
+func operatorRoleID(t *testing.T, svc *auth.Service) []int64 {
+	t.Helper()
+	var id int64
+	if err := svc.DB.QueryRow(`SELECT id FROM roles WHERE name='operator'`).Scan(&id); err != nil {
+		t.Fatalf("query operator role: %v", err)
+	}
+	return []int64{id}
 }
