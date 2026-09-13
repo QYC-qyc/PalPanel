@@ -109,7 +109,7 @@ type instanceWriteReq struct {
 	GamePort      int    `json:"game_port"`
 	QueryPort     int    `json:"query_port"`
 	RestPort      *int   `json:"rest_port"` // 可选，0 或不传表示与 game_port 相同
-	AdminPassword string `json:"admin_password" binding:"required,min=6"`
+	AdminPassword string `json:"admin_password" binding:"required,min=8"`
 	RestEnabled   *bool  `json:"rest_enabled"`
 	RconEnabled   *bool  `json:"rcon_enabled"`
 	Autostart     bool   `json:"autostart"`
@@ -239,6 +239,10 @@ func (d Deps) handleInstancePatch(c *gin.Context) {
 		return
 	}
 	if req.AdminPassword != nil && *req.AdminPassword != "" {
+		if len(*req.AdminPassword) < 8 {
+			fail(c, http.StatusBadRequest, "密码强度不足：至少 8 位")
+			return
+		}
 		enc, err := auth.Encrypt(d.Secret, []byte(*req.AdminPassword))
 		if err != nil {
 			fail(c, http.StatusInternalServerError, "密码加密失败")
@@ -268,6 +272,13 @@ func (d Deps) handleInstanceDelete(c *gin.Context) {
 		fail(c, http.StatusNotFound, "实例不存在")
 		return
 	} else if err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	// 不使用数据库外键约束，级联由应用层负责：实例删除后清理其授权行，避免孤儿 grant。
+	// Instances.Delete 内部已提交、无法纳入同一事务，故两步顺序执行；第二步失败返回 500，
+	// 此时实例已删但授权行残留，只能靠运维清理（现实中仅在 DB 故障时发生）。
+	if _, err := d.DB.Exec(`DELETE FROM instance_grants WHERE instance_id=?`, id); err != nil {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
 	}

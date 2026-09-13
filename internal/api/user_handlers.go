@@ -233,16 +233,24 @@ func (d Deps) handleUserDelete(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "不能删除自己")
 		return
 	}
-	// 不能删最后一个 admin
+	// 一个事务内完成：last-admin 复查（事务内重读，防并发双删）→ 删 users → 级联清理 → 提交。
+	tx, err := d.DB.Begin()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	defer tx.Rollback()
+
+	// ① 事务内重查：该用户是否 admin + admin 总数
 	var n int
-	if err := d.DB.QueryRow(`SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id=ur.role_id
 		WHERE r.name='admin' AND ur.user_id=?`, id).Scan(&n); err != nil {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
 	}
 	if n > 0 {
 		var total int
-		if err := d.DB.QueryRow(`SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE r.name='admin'`).Scan(&total); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE r.name='admin'`).Scan(&total); err != nil {
 			fail(c, http.StatusInternalServerError, "删除失败")
 			return
 		}
@@ -251,7 +259,8 @@ func (d Deps) handleUserDelete(c *gin.Context) {
 			return
 		}
 	}
-	res, err := d.DB.Exec(`DELETE FROM users WHERE id=?`, id)
+	// ② 删 users
+	res, err := tx.Exec(`DELETE FROM users WHERE id=?`, id)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
@@ -265,11 +274,17 @@ func (d Deps) handleUserDelete(c *gin.Context) {
 		fail(c, http.StatusNotFound, "用户不存在")
 		return
 	}
-	if _, err := d.DB.Exec(`DELETE FROM user_roles WHERE user_id=?`, id); err != nil {
+	// ③ 级联清理（无外键约束，级联由应用层负责）
+	if _, err := tx.Exec(`DELETE FROM user_roles WHERE user_id=?`, id); err != nil {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
 	}
-	if _, err := d.DB.Exec(`DELETE FROM instance_grants WHERE user_id=?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM instance_grants WHERE user_id=?`, id); err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	// ④ 提交
+	if err := tx.Commit(); err != nil {
 		fail(c, http.StatusInternalServerError, "删除失败")
 		return
 	}

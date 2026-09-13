@@ -34,6 +34,9 @@ func (d Deps) handleRoleList(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "查询失败")
 		return
 	}
+	// defer Close：Scan/Err 失败的 return 路径也必须释放连接（MaxOpenConns(1) 下泄漏即全服阻塞）。
+	// database/sql 的 Close 幂等，正常读完后再显式关闭也安全。
+	defer rows.Close()
 	// DB 连接池为 MaxOpenConns(1)：必须先读完角色行并关闭 rows，
 	// 才能再发起权限码查询，否则内层 Query 会等连接造成死锁。
 	out := []roleDTO{}
@@ -51,7 +54,6 @@ func (d Deps) handleRoleList(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	rows.Close()
 	for i := range out {
 		prows, err := d.DB.Query(`SELECT code FROM role_permissions WHERE role_id=?`, out[i].ID)
 		if err != nil {
@@ -66,6 +68,11 @@ func (d Deps) handleRoleList(c *gin.Context) {
 				return
 			}
 			out[i].Permissions = append(out[i].Permissions, code)
+		}
+		if err := prows.Err(); err != nil {
+			prows.Close()
+			fail(c, http.StatusInternalServerError, "查询失败")
+			return
 		}
 		prows.Close()
 	}
@@ -159,10 +166,28 @@ func (d Deps) handleRoleDelete(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "内置角色不可删除")
 		return
 	}
-	d.DB.Exec(`DELETE FROM roles WHERE id=?`, rid)
-	d.DB.Exec(`DELETE FROM role_permissions WHERE role_id=?`, rid)
-	d.DB.Exec(`DELETE FROM user_roles WHERE role_id=?`, rid)
-	d.DB.Exec(`DELETE FROM instance_grants WHERE role_id=?`, rid)
+	// 4 表删除放进一个事务：任一失败整体回滚，不留半删状态（无外键约束，级联靠应用层）。
+	tx, err := d.DB.Begin()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`DELETE FROM roles WHERE id=?`,
+		`DELETE FROM role_permissions WHERE role_id=?`,
+		`DELETE FROM user_roles WHERE role_id=?`,
+		`DELETE FROM instance_grants WHERE role_id=?`,
+	} {
+		if _, err := tx.Exec(stmt, rid); err != nil {
+			fail(c, http.StatusInternalServerError, "删除失败")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		fail(c, http.StatusInternalServerError, "删除失败")
+		return
+	}
 	caller := c.MustGet("user").(auth.SessionUser)
 	d.Audit.Record(caller.ID, caller.Username, 0, "role.delete", "删除角色", c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"ok": true})

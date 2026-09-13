@@ -83,3 +83,59 @@ func TestInstanceVisibilityAndSecret(t *testing.T) {
 		t.Fatalf("admin delete want 200 got %d %s", w.Code, w.Body.String())
 	}
 }
+
+// TestInstancePasswordMinLength：实例密码与用户密码一致，至少 8 位（创建与 PATCH 均校验）。
+func TestInstancePasswordMinLength(t *testing.T) {
+	r, _, admin := setupAdmin(t)
+
+	// 创建：6 位密码 → 400
+	body := map[string]any{"name": "s1", "game_dir": filepath.Join(t.TempDir(), "s1"),
+		"game_port": 8211, "query_port": 27015, "admin_password": "abc123"}
+	if w := postJSON(r, "/api/v1/instances", admin, body); w.Code != http.StatusBadRequest {
+		t.Fatalf("6-char password want 400 got %d %s", w.Code, w.Body.String())
+	}
+
+	// 建 8 位密码实例后 PATCH 成 6 位 → 400
+	body["admin_password"] = "long-enough-1"
+	w := postJSON(r, "/api/v1/instances", admin, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create with 8+ chars: %d %s", w.Code, w.Body.String())
+	}
+	iid := int64(decode(t, w.Body.Bytes())["id"].(float64))
+	if w := patchJSON(r, "/api/v1/instances/"+itoa(iid), admin,
+		map[string]any{"admin_password": "abc123"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("patch 6-char password want 400 got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestInstanceDeleteCleansGrants：删除实例后 instance_grants 无该实例残留。
+func TestInstanceDeleteCleansGrants(t *testing.T) {
+	r, database, admin := setupAdmin(t)
+
+	body := map[string]any{"name": "s1", "game_dir": filepath.Join(t.TempDir(), "s1"),
+		"game_port": 8211, "query_port": 27015, "admin_password": "secret-pw-1"}
+	w := postJSON(r, "/api/v1/instances", admin, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create instance: %d %s", w.Code, w.Body.String())
+	}
+	iid := int64(decode(t, w.Body.Bytes())["id"].(float64))
+
+	// viewer 用户 + 实例 grant
+	w = postJSON(r, "/api/v1/users", admin, map[string]any{
+		"username": "vv", "password": "good-pass-7"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("create user: %d %s", w.Code, w.Body.String())
+	}
+	vid := queryInt64(t, database, `SELECT id FROM users WHERE username='vv'`)
+	if w := putJSON(r, "/api/v1/users/"+itoa(vid)+"/grants", admin,
+		map[string]any{"instance_ids": []int64{iid}}); w.Code != http.StatusOK {
+		t.Fatalf("grants: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := deleteJSON(r, "/api/v1/instances/"+itoa(iid), admin); w.Code != http.StatusOK {
+		t.Fatalf("delete instance: %d %s", w.Code, w.Body.String())
+	}
+	if n := countRows(t, database, `SELECT COUNT(*) FROM instance_grants WHERE instance_id=?`, iid); n != 0 {
+		t.Fatalf("instance_grants residual rows: %d", n)
+	}
+}

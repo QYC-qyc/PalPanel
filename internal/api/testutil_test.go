@@ -122,6 +122,16 @@ func queryInt64(t *testing.T, d *sql.DB, query string) int64 {
 	return id
 }
 
+// countRows 统计满足条件的行数（用于断言级联清理无残留）。
+func countRows(t *testing.T, d *sql.DB, query string, args ...any) int64 {
+	t.Helper()
+	var n int64
+	if err := d.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatalf("count %s: %v", query, err)
+	}
+	return n
+}
+
 // operatorRoleID 直接查库取 operator 角色 ID（内置角色 ID 不硬编码）。
 func operatorRoleID(t *testing.T, d *sql.DB) []int64 {
 	t.Helper()
