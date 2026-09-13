@@ -18,6 +18,8 @@ const (
 	PConfigRead      = "config.read"
 	PConfigWrite     = "config.write"
 	PPlayerRead      = "player.read"
+	PPlayerAnnounce  = "player.announce"
+	PPlayerSave      = "player.save"
 	PPlayerKick      = "player.kick"
 	PPlayerBan       = "player.ban"
 	PScheduleManage  = "schedule.manage"
@@ -29,7 +31,7 @@ var AllPermissions = []string{
 	PInstanceInstall, PInstanceUpgrade,
 	PBackupRead, PBackupCreate, PBackupRestore,
 	PConfigRead, PConfigWrite,
-	PPlayerRead, PPlayerKick, PPlayerBan,
+	PPlayerRead, PPlayerAnnounce, PPlayerSave, PPlayerKick, PPlayerBan,
 	PScheduleManage,
 }
 
