@@ -1,3 +1,11 @@
 .tmp/
 pal-research/
 .idea/
+data/
+dist-bin/
+config.yaml
+panel
+panel.exe
+*.db
+*.db-wal
+*.db-shm

@@ -34,7 +34,3 @@ func New(d Deps) *gin.Engine {
 	d.registerAudit(v1)
 	return r
 }
-
-func Run(cfg config.Config) error {
-	return New(Deps{Cfg: cfg}).Run(cfg.Listen)
-}
