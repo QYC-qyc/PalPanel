@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,7 +18,11 @@ import (
 var migrations embed.FS
 
 // Open 打开数据目录下的 panel.db（SQLite，WAL 模式，开启外键约束）。
+// 数据目录不存在时自动创建（首次启动开箱即用）。
 func Open(dataDir string) (*sql.DB, error) {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, err
+	}
 	dsn := filepath.Join(dataDir, "panel.db")
 	handle, err := sql.Open("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {

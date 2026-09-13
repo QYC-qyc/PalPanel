@@ -61,6 +61,35 @@ func TestLoginFlow(t *testing.T) {
 	}
 }
 
+// TestLoginNoUserEnum：登录失败的三种情形（用户不存在/密码错误/账号停用）
+// 必须返回同一错误 ErrBadCreds，防止用户枚举；ErrInactive 仅保留给 SessionUser。
+func TestLoginNoUserEnum(t *testing.T) {
+	s := newService(t)
+	if _, err := s.Setup("root", "good-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errNoUser := s.Login("no-such-user", "whatever-1")
+	_, errBadPass := s.Login("root", "wrong-pass!")
+	if !errors.Is(errNoUser, ErrBadCreds) || !errors.Is(errBadPass, ErrBadCreds) {
+		t.Fatalf("want ErrBadCreds, got %v / %v", errNoUser, errBadPass)
+	}
+	if errNoUser.Error() != errBadPass.Error() {
+		t.Fatalf("error text mismatch: %q vs %q", errNoUser.Error(), errBadPass.Error())
+	}
+
+	if _, err := s.DB.Exec(`UPDATE users SET is_active=0 WHERE username='root'`); err != nil {
+		t.Fatal(err)
+	}
+	_, errInactive := s.Login("root", "good-pass-1")
+	if !errors.Is(errInactive, ErrBadCreds) {
+		t.Fatalf("inactive login want ErrBadCreds got %v", errInactive)
+	}
+	if errors.Is(errInactive, ErrInactive) {
+		t.Fatal("inactive login must not leak ErrInactive")
+	}
+}
+
 func TestStaleTokenRejected(t *testing.T) {
 	s := newService(t)
 	if _, err := s.Setup("root", "good-pass-1"); err != nil {

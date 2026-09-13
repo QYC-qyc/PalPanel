@@ -1,8 +1,23 @@
 package db
 
 import (
+	"path/filepath"
 	"testing"
 )
+
+// TestOpenCreatesMissingDataDir：数据目录不存在时 Open 必须自动创建，
+// 保证面板首次启动（main 组装路径）可直接运行。
+func TestOpenCreatesMissingDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-exist", "data")
+	d, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() // Windows 下必须先关闭连接，t.TempDir 才能清理文件
+	if err := Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMigrateIdempotent(t *testing.T) {
 	database, err := Open(t.TempDir())

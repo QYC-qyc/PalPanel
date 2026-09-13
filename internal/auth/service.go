@@ -15,6 +15,10 @@ var (
 	ErrStaleToken   = errors.New("登录已过期，请重新登录")
 )
 
+// dummyHash 用于"用户不存在"路径的恒时 bcrypt 比较，抹平与真实校验的时序差，
+// 防止通过响应时间枚举用户名。值为 init 时随机串的 bcrypt 摘要，永远不匹配。
+const dummyHash = `$2a$10$Qm4pP58HTNO9JDO5r38d1OB3Ka5zfhrWHQQMA.wSg3AuaC6WMGxf6`
+
 type Service struct {
 	DB     *sql.DB
 	Secret []byte
@@ -22,30 +26,28 @@ type Service struct {
 
 func New(d *sql.DB, secret []byte) *Service { return &Service{DB: d, Secret: secret} }
 
-func (s *Service) userCount() (int, error) {
-	var n int
-	err := s.DB.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
-	return n, err
-}
-
 func (s *Service) Setup(username, password string) (int64, error) {
 	if len(password) < 8 {
 		return 0, ErrWeakPassword
-	}
-	if n, err := s.userCount(); err != nil {
-		return 0, err
-	} else if n > 0 {
-		return 0, ErrSetupDone
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return 0, err
 	}
+	// 计数检查放在事务内：MaxOpenConns(1) 下事务完全串行化，消除 TOCTOU
+	// （并发 Setup 只可能有一个成功）。
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		return 0, ErrSetupDone
+	}
 	res, err := tx.Exec(`INSERT INTO users(username, password_hash) VALUES(?,?)`, username, string(hash))
 	if err != nil {
 		return 0, err
@@ -80,6 +82,8 @@ func (s *Service) Login(username, password string) (string, error) {
 	err := s.DB.QueryRow(`SELECT id, role_version, password_hash, is_active FROM users WHERE username=?`,
 		username).Scan(&id, &rv, &hash, &active)
 	if errors.Is(err, sql.ErrNoRows) {
+		// 用户不存在：对 dummy hash 做一次等价成本的比较，抹平时序。
+		_ = bcrypt.CompareHashAndPassword([]byte(dummyHash), []byte(password))
 		return "", ErrBadCreds
 	}
 	if err != nil {
@@ -88,8 +92,10 @@ func (s *Service) Login(username, password string) (string, error) {
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return "", ErrBadCreds
 	}
+	// 停用账号登录统一返回 ErrBadCreds（防枚举）；
+	// ErrInactive 哨兵保留给 SessionUser 会话校验使用。
 	if !active {
-		return "", ErrInactive
+		return "", ErrBadCreds
 	}
 	return SignToken(s.Secret, id, rv)
 }
