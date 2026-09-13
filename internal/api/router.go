@@ -27,6 +27,7 @@ func New(d Deps) *gin.Engine {
 	d.registerAuth(v1)
 	d.registerAuthed(v1)
 	d.registerUsers(v1)
+	d.registerRoles(v1)
 	return r
 }
 

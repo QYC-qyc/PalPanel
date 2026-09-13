@@ -40,6 +40,59 @@ func TestReplaceUserRolesBumps(t *testing.T) {
 	}
 }
 
+func TestReplaceRoleGrants(t *testing.T) {
+	s := newService(t)
+	uid, _ := s.Setup("root", "good-pass-1")
+	var opID int64
+	if err := s.DB.QueryRow(`SELECT id FROM roles WHERE name='operator'`).Scan(&opID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceUserRoles(uid, []int64{opID}); err != nil {
+		t.Fatal(err)
+	}
+	var rv int64
+	if err := s.DB.QueryRow(`SELECT role_version FROM users WHERE id=?`, uid).Scan(&rv); err != nil {
+		t.Fatal(err)
+	}
+
+	// 给角色授 1 个实例 grant
+	if err := s.ReplaceRoleGrants(opID, []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM instance_grants WHERE role_id=? AND instance_id=1`, opID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 grant row, got %d", n)
+	}
+	var rv2 int64
+	if err := s.DB.QueryRow(`SELECT role_version FROM users WHERE id=?`, uid).Scan(&rv2); err != nil {
+		t.Fatal(err)
+	}
+	if rv2 != rv+1 {
+		t.Fatalf("role_version should bump: %d -> %d", rv, rv2)
+	}
+
+	// 再授空 → 行消失，且继续 bump
+	if err := s.ReplaceRoleGrants(opID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM instance_grants WHERE role_id=?`, opID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("want 0 grant rows, got %d", n)
+	}
+	var rv3 int64
+	if err := s.DB.QueryRow(`SELECT role_version FROM users WHERE id=?`, uid).Scan(&rv3); err != nil {
+		t.Fatal(err)
+	}
+	if rv3 != rv2+1 {
+		t.Fatalf("role_version should bump again: %d -> %d", rv2, rv3)
+	}
+}
+
 func TestCanAfterRolePermChange(t *testing.T) {
 	s := newService(t)
 	uid, _ := s.Setup("root", "good-pass-1")
